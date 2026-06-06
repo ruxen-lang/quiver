@@ -1,0 +1,78 @@
+Tester.describe("Col builder DSL") do |t: &var Tester|
+  t.it("text appends a static node") do
+    var col = Col.new
+    col.text("Counter")
+    t.expect(col.size).to_eq(1)
+    t.expect(col.kind_at(0)).to_eq(kind_text())
+    t.expect(col.label_at(0)).to_eq(String.from("Counter"))
+    t.expect(col.compute_at(0)).to_eq(-1)
+    t.expect(col.handler_at(0)).to_eq(-1)
+  end
+
+  t.it("dyn_text appends a reactive node holding its closure") do
+    var col = Col.new
+    col.dyn_text({ |ui: &var Ui| String.from("computed") })
+    t.expect(col.kind_at(0)).to_eq(kind_dyn_text())
+    t.expect(col.compute_at(0)).to_eq(0)
+    t.expect(col.handler_at(0)).to_eq(-1)
+  end
+
+  t.it("button appends a node holding its handler") do
+    var col = Col.new
+    col.button("tap", { |ui: &var Ui| nil })
+    t.expect(col.kind_at(0)).to_eq(kind_button())
+    t.expect(col.label_at(0)).to_eq(String.from("tap"))
+    t.expect(col.handler_at(0)).to_eq(0)
+    t.expect(col.compute_at(0)).to_eq(-1)
+  end
+
+  t.it("nodes keep declaration order and ids") do
+    var col = Col.new
+    col.text("a")
+    col.dyn_text({ |ui: &var Ui| String.from("b") })
+    col.button("c", { |ui: &var Ui| nil })
+    t.expect(col.size).to_eq(3)
+    t.expect(col.kind_at(0)).to_eq(kind_text())
+    t.expect(col.kind_at(1)).to_eq(kind_dyn_text())
+    t.expect(col.kind_at(2)).to_eq(kind_button())
+  end
+
+  t.it("a stored dyn_text closure runs against a live Ui and subscribes") do
+    var ui = Ui.new
+    let count = ui.state(5)
+    var col = Col.new
+    col.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
+
+    ui.current_scope = 0
+    let out = match col.computes.get(0)
+      Some(f) -> f.(&var ui)
+      nil     -> String.from("missing")
+    end
+    ui.current_scope = -1
+
+    t.expect(out).to_eq(String.from("count: 5"))
+    t.expect(ui.subs.size as Int).to_eq(1)
+  end
+
+  t.it("a stored button handler can update state through the Ui") do
+    var ui = Ui.new
+    let count = ui.state(0)
+    var col = Col.new
+    col.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+
+    match col.handlers.get(0)
+      Some(f) -> f.(&var ui)
+      nil     -> nil
+    end
+
+    t.expect(count.peek).to_eq(1)
+  end
+
+  t.it("out-of-range accessors return sentinels, not panics") do
+    var col = Col.new
+    t.expect(col.kind_at(9)).to_eq(0)
+    t.expect(col.label_at(9)).to_eq(String.from(""))
+    t.expect(col.compute_at(9)).to_eq(-1)
+    t.expect(col.handler_at(9)).to_eq(-1)
+  end
+end
