@@ -1,0 +1,172 @@
+## `App` — owns the reactive graph (`Ui`), the built tree (`Col`), the
+## reactive-text cache, and the layout geometry. Drives the core loop:
+##
+##   build -> mount -> [event -> handler -> dirty -> flush -> repaint]*
+##
+## Tracking scopes ARE node ids in this slice: reactive text node `i` is
+## tracking scope `i`, so `Ui.dirty` is directly the set of nodes whose
+## text must be recomputed (and repainted).
+
+## Layout constants (device-independent pixels; one bitmap-ish font for the
+## slice — real text metrics arrive with canvas's Skia text stack).
+def row_height -> Int { 24 }
+def char_width -> Int { 8 }
+def pad_x -> Int { 4 }
+def baseline_drop -> Int { 16 }
+
+class App
+  ui: Ui
+  root: Col
+  ## node id -> current reactive text (static nodes are read from labels).
+  cache: Hash[Int, String]
+  ## Geometry per node id, written by `layout`.
+  geom_x: Hash[Int, Int]
+  geom_y: Hash[Int, Int]
+  geom_w: Hash[Int, Int]
+  geom_h: Hash[Int, Int]
+
+  def init
+    self.ui = Ui.new
+    self.root = Col.new
+    self.cache = Hash.new
+    self.geom_x = Hash.new
+    self.geom_y = Hash.new
+    self.geom_w = Hash.new
+    self.geom_h = Hash.new
+  end
+
+  ## Build an app: run the user's block once to construct the tree, then
+  ## mount (run every tracking scope once) and lay out.
+  ##
+  ##   var app = App.build({ |ui: &var Ui, root: &var Col|
+  ##     let count = ui.state(0)
+  ##     root.text("Counter")
+  ##     root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
+  ##     root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+  ##   })
+  def self.build(f: any Fn[Fn(&var Ui, &var Col) -> nil]) -> App
+    var app = App.new
+    f.(&var app.ui, &var app.root)
+    app.mount
+    app.arrange
+    app
+  end
+
+  ## Run every reactive compute once under its tracking scope, filling the
+  ## text cache and recording subscriptions.
+  def var mount -> nil
+    var i = 0
+    let n = self.root.size
+    while i < n
+      self.refresh_node(i)
+      i = i + 1
+    end
+  end
+
+  ## Re-run the tracking scope of node `i` (no-op for static nodes).
+  def var refresh_node(i: Int) -> nil
+    let ci = self.root.compute_at(i)
+    if ci >= 0
+      self.ui.current_scope = i
+      match self.root.computes.get(ci)
+        Some(f) -> self.cache.insert(i, f.(&var self.ui))
+        nil     -> nil
+      end
+      self.ui.current_scope = -1
+    end
+  end
+
+  ## Current display text of node `i`: reactive cache, else static label.
+  def text_of(i: Int) -> String
+    if let Some(s) = self.cache.get(i)
+      return s.clone
+    end
+    self.root.label_at(i)
+  end
+
+  ## Re-run only the dirty tracking scopes. Returns the node ids refreshed
+  ## (the targeted-repaint set), clearing the dirty set.
+  def var flush -> Array[Int]
+    var refreshed: Array[Int] = Array.new
+    for s in self.ui.dirty.to_a
+      self.refresh_node(*s)
+      refreshed.push(*s)
+    end
+    self.ui.dirty.clear
+    refreshed
+  end
+
+  ## Invoke node `i`'s click handler (no-op when it has none).
+  def var click(i: Int) -> nil
+    let hi = self.root.handler_at(i)
+    if hi >= 0
+      match self.root.handlers.get(hi)
+        Some(f) -> f.(&var self.ui)
+        nil     -> nil
+      end
+    end
+  end
+
+  ## Column layout: stack nodes top to bottom, one row each. Buttons get a
+  ## label-sized box; text nodes span their text width.
+  def var arrange -> nil
+    var i = 0
+    let n = self.root.size
+    var y = 0
+    while i < n
+      let label = self.text_of(i)
+      let w = (label.size as Int) * char_width() + pad_x() * 2
+      self.geom_x.insert(i, 0)
+      self.geom_y.insert(i, y)
+      self.geom_w.insert(i, w)
+      self.geom_h.insert(i, row_height())
+      y = y + row_height()
+      i = i + 1
+    end
+  end
+
+  def x_of(i: Int) -> Int { self.geom_lookup(&self.geom_x, i) }
+  def y_of(i: Int) -> Int { self.geom_lookup(&self.geom_y, i) }
+  def w_of(i: Int) -> Int { self.geom_lookup(&self.geom_w, i) }
+  def h_of(i: Int) -> Int { self.geom_lookup(&self.geom_h, i) }
+
+  ## Topmost interactive node containing (x, y), or -1.
+  def hit_test(x: Int, y: Int) -> Int
+    var i = 0
+    let n = self.root.size
+    while i < n
+      if self.root.handler_at(i) >= 0
+        if self.contains(i, x, y)
+          return i
+        end
+      end
+      i = i + 1
+    end
+    -1
+  end
+
+  ## A pointer-down event from the engine: hit-test, run the handler.
+  ## Returns the node id that handled it, or -1.
+  def var pointer_down(x: Int, y: Int) -> Int
+    let i = self.hit_test(x, y)
+    if i >= 0
+      self.click(i)
+    end
+    i
+  end
+
+  private
+
+  def geom_lookup(table: &Hash[Int, Int], i: Int) -> Int
+    match table.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def contains(i: Int, x: Int, y: Int) -> Bool
+    let gx = self.x_of(i)
+    let gy = self.y_of(i)
+    x >= gx && x < gx + self.w_of(i) && y >= gy && y < gy + self.h_of(i)
+  end
+end

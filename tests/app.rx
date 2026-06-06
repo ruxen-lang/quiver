@@ -1,0 +1,100 @@
+Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var Tester|
+  let counter_app = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let count = ui.state(0)
+      root.text("Counter")
+      root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
+      root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+    })
+  }
+
+  t.it("mount computes reactive text and leaves static text alone") do
+    var app = counter_app.()
+    t.expect(app.text_of(0)).to_eq(String.from("Counter"))
+    t.expect(app.text_of(1)).to_eq(String.from("count: 0"))
+    t.expect(app.text_of(2)).to_eq(String.from("tap"))
+  end
+
+  t.it("click runs the handler; flush refreshes ONLY the subscribed node") do
+    var app = counter_app.()
+    app.click(2)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(1)
+    ArrayMatcher.new(&refreshed).to_include(1)
+    t.expect(app.text_of(1)).to_eq(String.from("count: 1"))
+    t.expect(app.text_of(0)).to_eq(String.from("Counter"))
+  end
+
+  t.it("pin: the static/reactive boundary — static nodes NEVER re-run") do
+    var app = counter_app.()
+    app.click(2)
+    app.click(2)
+    let refreshed = app.flush
+    # only node 1 (the dyn_text tracking scope) is ever refreshed
+    t.expect(refreshed.size as Int).to_eq(1)
+    ArrayMatcher.new(&refreshed).to_include(1)
+    t.expect(app.text_of(1)).to_eq(String.from("count: 2"))
+  end
+
+  t.it("flush with nothing dirty refreshes nothing") do
+    var app = counter_app.()
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(0)
+  end
+
+  t.it("updating an unsubscribed state dirties no scopes") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let shown = ui.state(1)
+      let hidden = ui.state(2)
+      root.dyn_text({ |ui2: &var Ui| "shown: #{shown.get(ui2)}" })
+      root.button("poke hidden", { |ui2: &var Ui| hidden.update(ui2, { |c| c + 1 }) })
+    })
+    app.click(1)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(0)
+    t.expect(app.text_of(0)).to_eq(String.from("shown: 1"))
+  end
+
+  t.it("layout stacks rows top to bottom") do
+    var app = counter_app.()
+    t.expect(app.y_of(0)).to_eq(0)
+    t.expect(app.y_of(1)).to_eq(row_height())
+    t.expect(app.y_of(2)).to_eq(row_height() * 2)
+    t.expect(app.h_of(0)).to_eq(row_height())
+    t.expect(app.x_of(0)).to_eq(0)
+  end
+
+  t.it("layout sizes a node to its text width") do
+    var app = counter_app.()
+    # "Counter" = 7 chars
+    t.expect(app.w_of(0)).to_eq(7 * char_width() + pad_x() * 2)
+    # "tap" = 3 chars
+    t.expect(app.w_of(2)).to_eq(3 * char_width() + pad_x() * 2)
+  end
+
+  t.it("hit_test finds the button, misses everything else") do
+    var app = counter_app.()
+    # inside the button row (third row)
+    t.expect(app.hit_test(2, row_height() * 2 + 2)).to_eq(2)
+    # static text rows are not interactive
+    t.expect(app.hit_test(2, 2)).to_eq(-1)
+    # outside any node
+    t.expect(app.hit_test(500, 500)).to_eq(-1)
+  end
+
+  t.it("pointer_down drives the full loop: hit -> handler -> dirty -> flush") do
+    var app = counter_app.()
+    let hit = app.pointer_down(2, row_height() * 2 + 2)
+    t.expect(hit).to_eq(2)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(1)
+    t.expect(app.text_of(1)).to_eq(String.from("count: 1"))
+  end
+
+  t.it("pointer_down outside any button is a no-op") do
+    var app = counter_app.()
+    let hit = app.pointer_down(1, 1)
+    t.expect(hit).to_eq(-1)
+    t.expect(app.flush.size as Int).to_eq(0)
+  end
+end
