@@ -79,6 +79,18 @@ class Ui
     end
   end
 
+  ## Drop every subscription held by `scope`. Called before a tracking
+  ## scope re-runs so its subscriptions always reflect its LAST run —
+  ## a closure that conditionally reads different states must not stay
+  ## subscribed to states it no longer reads.
+  def var unsubscribe_scope(scope: Int) -> nil
+    for sid in self.subs.keys
+      if let Some(scopes) = self.subs.get(sid)
+        scopes.remove(scope)
+      end
+    end
+  end
+
   private
 
   def var fresh_id -> Int

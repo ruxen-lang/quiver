@@ -40,13 +40,13 @@ quiver paints dirty nodes ─► canvas Canvas (Skia) ─► Window surface ─�
 ## Internal shape of `quiver`
 
 ```
-run()  ──►  signal arena runtime (owns all Signal state; deterministic drop)
-              │
-   DSL (column/text/button …) builds the widget tree ONCE
-              │
-   layout pass ──► geometry ──► paint pass ──► canvas Canvas
-              │
-   event dispatch ──► handler blocks ──► signal updates ──► targeted repaint
+App.build  ──►  Ui (reactive graph: subscriptions + dirty scopes, &var Ui)
+                  │
+   DSL (Col: text/dyn_text/button) builds the flat node arena ONCE
+                  │
+   arrange ──► geometry ──► paint pass ──► PaintSurface (──► canvas Canvas)
+                  │
+   pointer_down ──► handler closures ──► State updates ──► flush ──► targeted repaint
 ```
 
 See [`REACTIVITY.md`](REACTIVITY.md) for the arena/`Copy`-handle pattern and

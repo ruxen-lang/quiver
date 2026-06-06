@@ -13,7 +13,7 @@ de-risks the *language-level* reactive API.
 ## Milestone 1 — the counter app, L2 side ✅
 
 All five core-slice items are implemented and pinned by tests
-(37 tests across `tests/`):
+(40 tests across `tests/`):
 
 1. **Reactive core** — `Ui` graph + `State[T]` handles (`src/lib.rx`).
    Explicit `&var Ui` arena instead of the sketched global one (safe Ruxen

@@ -55,6 +55,48 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
     t.expect(app.text_of(0)).to_eq(String.from("shown: 1"))
   end
 
+  t.it("two dyn_text nodes on one state both refresh and repaint") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let count = ui.state(0)
+      root.dyn_text({ |ui2: &var Ui| "a: #{count.get(ui2)}" })
+      root.dyn_text({ |ui2: &var Ui| "b: #{count.get(ui2)}" })
+      root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+    })
+    app.click(2)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(2)
+    t.expect(app.text_of(0)).to_eq(String.from("a: 1"))
+    t.expect(app.text_of(1)).to_eq(String.from("b: 1"))
+  end
+
+  t.it("re-run drops stale subscriptions from conditional reads") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let flag = ui.state(1)
+      let a = ui.state(10)
+      let b = ui.state(20)
+      # a closure passing its &var Ui param more than once must reborrow
+      # with `&var *ui2` (passing `ui2` itself moves the reference)
+      root.dyn_text({ |ui2: &var Ui|
+        if flag.get(&var *ui2) > 0
+          "a=#{a.get(&var *ui2)}"
+        else
+          "b=#{b.get(&var *ui2)}"
+        end
+      })
+      root.button("flip", { |ui2: &var Ui| flag.set(ui2, 0) })
+      root.button("poke a", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+    })
+    t.expect(app.text_of(0)).to_eq(String.from("a=10"))
+    # flip: the scope re-runs and now reads flag+b, NOT a
+    app.click(1)
+    app.flush
+    t.expect(app.text_of(0)).to_eq(String.from("b=20"))
+    # poking a must no longer dirty the scope
+    app.click(2)
+    t.expect(app.flush.size as Int).to_eq(0)
+    t.expect(app.text_of(0)).to_eq(String.from("b=20"))
+  end
+
   t.it("layout stacks rows top to bottom") do
     var app = counter_app.()
     t.expect(app.y_of(0)).to_eq(0)

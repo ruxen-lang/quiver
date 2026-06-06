@@ -54,6 +54,9 @@ ruxen fmt <file>                  # canonical formatting
   (pointer-copy) — sound today because drops don't run yet.
 - `arr[i]` with a non-literal index parses as generics → use `.get(i)`;
   there's no index assignment → push-only arrays or `Hash.insert`.
+- A closure passing its `&var T` param as an argument more than once must
+  reborrow: `f(&var *ui2)`. Hash tuple-iteration values don't type-resolve
+  for method calls → iterate `.keys` + `.get`.
 - `.size` returns `USize` → cast `as Int`. Multi-statement `match` arms need
   `if let` or a helper (braces in an arm parse as a closure). `layout` is a
   keyword. Doc comments (`##`) between mixin method signatures break parsing.

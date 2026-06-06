@@ -17,7 +17,7 @@ Tester.describe("paint — full and targeted") do |t: &var Tester|
     t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
     t.expect(surface.command_at(1)).to_eq(String.from("text('Counter',4,16)"))
     t.expect(surface.command_at(2)).to_eq(String.from("text('count: 0',4,40)"))
-    t.expect(surface.command_at(3)).to_eq(String.from("rect(0,48,32,24)"))
+    t.expect(surface.command_at(3)).to_eq(String.from("rect(0,48,32,24,200,200,200)"))
     t.expect(surface.command_at(4)).to_eq(String.from("text('tap',4,64)"))
   end
 
@@ -27,10 +27,29 @@ Tester.describe("paint — full and targeted") do |t: &var Tester|
     let dirty = app.flush
     var surface = RecordingSurface.new
     paint_dirty(&app, &var surface, &dirty)
-    # one dirty node -> background rect + its text; nothing else repaints
+    # one dirty node -> full-span erase + its text; nothing else repaints
     t.expect(surface.size).to_eq(2)
-    t.expect(surface.command_at(0)).to_eq(String.from("rect(0,24,72,24)"))
+    t.expect(surface.command_at(0)).to_eq(String.from("rect(0,24,72,24,255,255,255)"))
     t.expect(surface.command_at(1)).to_eq(String.from("text('count: 1',4,40)"))
+  end
+
+  t.it("erase span grows with the text: the 9 -> 10 transition leaves no ghost") do
+    var app = counter_app.()
+    var taps = 0
+    while taps < 10
+      app.pointer_down(2, row_height() * 2 + 2)
+      app.flush
+      taps = taps + 1
+    end
+    # "count: 10" is 9 chars wide -> w = 80; span grew with it
+    t.expect(app.w_of(1)).to_eq(9 * char_width() + pad_x() * 2)
+    app.pointer_down(2, row_height() * 2 + 2)
+    let dirty = app.flush
+    var surface = RecordingSurface.new
+    paint_dirty(&app, &var surface, &dirty)
+    # erase covers the full (grown) span, then draws "count: 11"
+    t.expect(surface.command_at(0)).to_eq(String.from("rect(0,24,80,24,255,255,255)"))
+    t.expect(surface.command_at(1)).to_eq(String.from("text('count: 11',4,40)"))
   end
 
   t.it("paint_dirty with an empty set paints nothing") do

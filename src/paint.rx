@@ -36,7 +36,7 @@ class RecordingSurface
   end
 
   def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
-    self.commands.push("rect(#{x},#{y},#{w},#{h})")
+    self.commands.push("rect(#{x},#{y},#{w},#{h},#{r},#{g},#{b})")
   end
 
   def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
@@ -83,7 +83,9 @@ end
 ## repaints exactly the nodes whose tracking scopes read it.
 def paint_dirty[S: PaintSurface](app: &App, surface: &var S, nodes: &Array[Int]) -> nil
   for i in nodes
-    surface.fill_rect(app.x_of(*i), app.y_of(*i), app.w_of(*i), app.h_of(*i), 255, 255, 255)
+    # Erase the full row span (monotonic max width) — safe because each
+    # row holds exactly one node, and immune to labels that shrink.
+    surface.fill_rect(0, app.y_of(*i), app.span_w, app.h_of(*i), 255, 255, 255)
     paint_node(app, surface, *i)
   end
 end

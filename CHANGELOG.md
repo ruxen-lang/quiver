@@ -25,6 +25,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   API skeleton, and full design docs (`DESIGN`, `ARCHITECTURE`, `REACTIVITY`,
   `DSL`, `ROADMAP`).
 
+### Fixed
+- Targeted repaint erases the full (monotonic) row span and `flush`
+  re-arranges geometry, so labels that grow or shrink can never leave ghost
+  pixels (pinned by the 9 → 10 transition test).
+- Tracking scopes drop all previous subscriptions before re-running, so
+  conditional reads cannot leave stale subscriptions (over-notification).
+- `RecordingSurface.fill_rect` records its color, so erase vs. button
+  background are distinguishable in tests.
+
 ### Changed
 - Public API renamed/reshaped from the design sketch where ruxen v1 forced
   it: `State[T]` (not `Signal[T]` — std collision), explicit `&var Ui`

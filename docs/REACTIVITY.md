@@ -36,10 +36,15 @@ handles. Prototyping against today's ruxen settled it differently:
 var ui = Ui.new
 let count = ui.state(0)          # State[Int]
 
-count.get(&var ui)                # read  — subscribes the recording scope
-count.peek                        # read  — never subscribes
-count.set(&var ui, 5)             # write — marks subscribed scopes dirty
-count.update(ui2, { |c| c + 1 })  # read-modify-write (ui2: &var Ui in scope)
+count.get(&var ui)                    # read  — subscribes the recording scope
+count.peek                            # read  — never subscribes
+count.set(&var ui, 5)                 # write — marks subscribed scopes dirty
+count.update(&var ui, { |c| c + 1 })  # read-modify-write
+
+# inside a closure that received `ui2: &var Ui`, pass it along directly —
+# and reborrow with `&var *ui2` if the closure uses it more than once:
+#   count.update(ui2, { |c| c + 1 })
+#   flag.get(&var *ui2)
 ```
 
 ## Tracking scopes
@@ -50,7 +55,10 @@ states it reads. In the core slice, scope ids are widget-tree node ids:
 and every `State.get` inside subscribes node `i` to that state. When the
 state later changes, only node `i` goes dirty; `App.flush` re-runs exactly
 the dirty nodes and returns their ids — which is also the targeted-repaint
-set (`paint_dirty`).
+set (`paint_dirty`). Before a scope re-runs, all its previous subscriptions
+are dropped (`Ui.unsubscribe_scope`), so a closure that conditionally reads
+different states never stays subscribed to one it no longer reads — pinned
+by the "stale subscriptions" test in `tests/app.rx`.
 
 ```
 dyn_text({ |ui| "count: #{count.get(ui)}" })

@@ -47,7 +47,7 @@ to a recording surface (the desktop window activates when canvas L1 lands).
 
 **Milestone 1, L2 side: complete.** Reactive core (`Ui` + `State[T]`),
 column DSL (`Col`), layout, paint (`PaintSurface` + targeted repaint), and
-pointer dispatch are implemented and pinned by 37 headless tests
+pointer dispatch are implemented and pinned by 40 headless tests
 (`ruxen test`). The desktop window path is blocked on `canvas` Milestone 1
 (SDL + Skia + event stream). See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -68,7 +68,7 @@ is documented in [`docs/DSL.md`](docs/DSL.md) and
 ## Develop
 
 ```bash
-ruxen test                      # 37 headless tests
+ruxen test                      # 40 headless tests
 ruxen build                     # library rlib (+ canvas dep piece)
 cd examples/counter && ruxen run
 ```

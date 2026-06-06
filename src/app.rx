@@ -24,6 +24,9 @@ class App
   geom_y: Hash[Int, Int]
   geom_w: Hash[Int, Int]
   geom_h: Hash[Int, Int]
+  ## Widest row ever laid out (monotonic). paint_dirty erases this full
+  ## span so a shrinking label can never leave ghost pixels behind.
+  span_w: Int
 
   def init
     self.ui = Ui.new
@@ -33,6 +36,7 @@ class App
     self.geom_y = Hash.new
     self.geom_w = Hash.new
     self.geom_h = Hash.new
+    self.span_w = 0
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -67,6 +71,7 @@ class App
   def var refresh_node(i: Int) -> nil
     let ci = self.root.compute_at(i)
     if ci >= 0
+      self.ui.unsubscribe_scope(i)
       self.ui.current_scope = i
       match self.root.computes.get(ci)
         Some(f) -> self.cache.insert(i, f.(&var self.ui))
@@ -93,6 +98,9 @@ class App
       refreshed.push(*s)
     end
     self.ui.dirty.clear
+    if refreshed.size as Int > 0
+      self.arrange
+    end
     refreshed
   end
 
@@ -120,6 +128,9 @@ class App
       self.geom_y.insert(i, y)
       self.geom_w.insert(i, w)
       self.geom_h.insert(i, row_height())
+      if w > self.span_w
+        self.span_w = w
+      end
       y = y + row_height()
       i = i + 1
     end
