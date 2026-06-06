@@ -1,0 +1,25 @@
+## The frame driver — the loop skeleton a shell (desktop window, test
+## harness) drives:
+##
+##   var app = App.build({ ... })
+##   first_frame(&app, &var surface)          # full paint
+##   loop:
+##     app.pointer_down(x, y)                  # feed engine events
+##     frame(&var app, &var surface)           # flush + targeted repaint
+##
+## The desktop shell (SDL window pump + Skia canvas) lives with the example
+## app binary until canvas L1 exposes its event stream; quiver itself stays
+## platform-free.
+
+## Paint the whole tree (first frame / after resize).
+def first_frame[S: PaintSurface](app: &App, surface: &var S) -> nil
+  paint_all(app, surface)
+end
+
+## One frame after input: re-run dirty tracking scopes, repaint exactly
+## those nodes. Returns how many nodes repainted (0 = idle frame).
+def frame[S: PaintSurface](app: &var App, surface: &var S) -> Int
+  let dirty = app.flush
+  paint_dirty(app, surface, &dirty)
+  dirty.size as Int
+end
