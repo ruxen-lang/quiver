@@ -1,0 +1,103 @@
+Tester.describe("State + Ui reactive core") do |t: &var Tester|
+  t.it("peek reads the initial value") do
+    var ui = Ui.new
+    let count = ui.state(41)
+    t.expect(count.peek).to_eq(41)
+  end
+
+  t.it("set replaces the value") do
+    var ui = Ui.new
+    let count = ui.state(0)
+    count.set(&var ui, 7)
+    t.expect(count.peek).to_eq(7)
+  end
+
+  t.it("update applies a closure read-modify-write") do
+    var ui = Ui.new
+    let count = ui.state(20)
+    count.update(&var ui, { |c| c + 1 })
+    count.update(&var ui, { |c| c * 2 })
+    t.expect(count.peek).to_eq(42)
+  end
+
+  t.it("string state holds owned strings") do
+    var ui = Ui.new
+    let name = ui.state_str(String.from("ada"))
+    name.set(&var ui, String.from("lovelace"))
+    t.expect(name.peek).to_eq(String.from("lovelace"))
+  end
+
+  t.it("get inside a tracking scope subscribes that scope") do
+    var ui = Ui.new
+    let count = ui.state(0)
+    ui.current_scope = 3
+    count.get(&var ui)
+    ui.current_scope = -1
+    t.expect(ui.subs.size as Int).to_eq(1)
+  end
+
+  t.it("get outside any tracking scope subscribes nothing") do
+    var ui = Ui.new
+    let count = ui.state(0)
+    count.get(&var ui)
+    t.expect(ui.subs.size as Int).to_eq(0)
+  end
+
+  t.it("peek never subscribes, even inside a tracking scope") do
+    var ui = Ui.new
+    let count = ui.state(0)
+    ui.current_scope = 3
+    count.peek
+    ui.current_scope = -1
+    t.expect(ui.subs.size as Int).to_eq(0)
+  end
+
+  t.it("set marks subscribed scopes dirty") do
+    var ui = Ui.new
+    let count = ui.state(0)
+    ui.current_scope = 5
+    count.get(&var ui)
+    ui.current_scope = -1
+    count.set(&var ui, 1)
+    t.expect(ui.dirty.size as Int).to_eq(1)
+    BoolMatcher.new(ui.dirty.include?(5)).to_be_truthy
+  end
+
+  t.it("set of an unsubscribed state dirties nothing") do
+    var ui = Ui.new
+    let watched = ui.state(0)
+    let lonely = ui.state(0)
+    ui.current_scope = 5
+    watched.get(&var ui)
+    ui.current_scope = -1
+    lonely.set(&var ui, 9)
+    t.expect(ui.dirty.size as Int).to_eq(0)
+  end
+
+  t.it("two scopes reading one state both go dirty on set") do
+    var ui = Ui.new
+    let count = ui.state(0)
+    ui.current_scope = 1
+    count.get(&var ui)
+    ui.current_scope = 2
+    count.get(&var ui)
+    ui.current_scope = -1
+    count.set(&var ui, 1)
+    t.expect(ui.dirty.size as Int).to_eq(2)
+  end
+
+  t.it("each state gets a distinct id") do
+    var ui = Ui.new
+    let a = ui.state(0)
+    let b = ui.state(0)
+    t.expect(a.id).not_to_eq(b.id)
+  end
+
+  t.it("a captured handle in a stored closure sees live updates") do
+    var ui = Ui.new
+    let count = ui.state(10)
+    let read = { || count.peek }
+    count.set(&var ui, 11)
+    t.expect(read.()).to_eq(11)
+  end
+end
