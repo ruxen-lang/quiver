@@ -1,0 +1,89 @@
+## Painting.
+##
+## quiver paints through the `PaintSurface` mixin — a primitives-only
+## boundary (Ints + &String) so that:
+##   - tests paint headlessly onto a `RecordingSurface`, and
+##   - the desktop shell adapts it to canvas's Skia `Canvas` in the app
+##     binary (library builds can't see dependency symbols in ruxen v1,
+##     so the canvas adapter lives with the example app, not here).
+##
+## Colors are 0-255 RGB Ints. Coordinates are device-independent pixels.
+
+## Required methods (doc comments between mixin signatures trip the v1
+## parser, so they live here):
+##   fill_clear(r, g, b)                   — fill the whole surface
+##   fill_rect(x, y, w, h, r, g, b)        — fill a rectangle
+##   draw_text(text, x, y, r, g, b)        — one line, baseline at (x, y)
+mixin PaintSurface
+  def fill_clear(r: Int, g: Int, b: Int) -> nil
+  def fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+  def draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+end
+
+## A PaintSurface that records draw commands as strings — the headless
+## test double that pins paint output without a window.
+class RecordingSurface
+  include PaintSurface
+
+  commands: Array[String]
+
+  def init
+    self.commands = Array.new
+  end
+
+  def var fill_clear(r: Int, g: Int, b: Int) -> nil
+    self.commands.push("clear(#{r},#{g},#{b})")
+  end
+
+  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+    self.commands.push("rect(#{x},#{y},#{w},#{h})")
+  end
+
+  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+    self.commands.push("text('#{text}',#{x},#{y})")
+  end
+
+  def size -> Int
+    self.commands.size as Int
+  end
+
+  def command_at(i: Int) -> String
+    match self.commands.get(i)
+      Some(s) -> s.clone
+      nil     -> String.from("")
+    end
+  end
+end
+
+## Paint one node: buttons get a grey box behind their label.
+def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  let x = app.x_of(i)
+  let y = app.y_of(i)
+  if app.root.kind_at(i) == kind_button()
+    surface.fill_rect(x, y, app.w_of(i), app.h_of(i), 200, 200, 200)
+  end
+  let label = app.text_of(i)
+  surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
+end
+
+## Full paint: clear, then every node in tree order. Used for the first
+## frame and after resize.
+def paint_all[S: PaintSurface](app: &App, surface: &var S) -> nil
+  surface.fill_clear(255, 255, 255)
+  var i = 0
+  let n = app.root.size
+  while i < n
+    paint_node(app, surface, i)
+    i = i + 1
+  end
+end
+
+## Targeted repaint: repaint ONLY the given nodes (the set `App.flush`
+## returned). This is the fine-grained no-diff path — a state change
+## repaints exactly the nodes whose tracking scopes read it.
+def paint_dirty[S: PaintSurface](app: &App, surface: &var S, nodes: &Array[Int]) -> nil
+  for i in nodes
+    surface.fill_rect(app.x_of(*i), app.y_of(*i), app.w_of(*i), app.h_of(*i), 255, 255, 255)
+    paint_node(app, surface, *i)
+  end
+end

@@ -1,0 +1,43 @@
+Tester.describe("paint — full and targeted") do |t: &var Tester|
+  let counter_app = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let count = ui.state(0)
+      root.text("Counter")
+      root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
+      root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+    })
+  }
+
+  t.it("paint_all clears then draws every node in tree order") do
+    var app = counter_app.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + text(0) + text(1) + [rect + text](2)
+    t.expect(surface.size).to_eq(5)
+    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    t.expect(surface.command_at(1)).to_eq(String.from("text('Counter',4,16)"))
+    t.expect(surface.command_at(2)).to_eq(String.from("text('count: 0',4,40)"))
+    t.expect(surface.command_at(3)).to_eq(String.from("rect(0,48,32,24)"))
+    t.expect(surface.command_at(4)).to_eq(String.from("text('tap',4,64)"))
+  end
+
+  t.it("paint_dirty repaints ONLY the flushed nodes — targeted repaint") do
+    var app = counter_app.()
+    app.pointer_down(2, row_height() * 2 + 2)
+    let dirty = app.flush
+    var surface = RecordingSurface.new
+    paint_dirty(&app, &var surface, &dirty)
+    # one dirty node -> background rect + its text; nothing else repaints
+    t.expect(surface.size).to_eq(2)
+    t.expect(surface.command_at(0)).to_eq(String.from("rect(0,24,72,24)"))
+    t.expect(surface.command_at(1)).to_eq(String.from("text('count: 1',4,40)"))
+  end
+
+  t.it("paint_dirty with an empty set paints nothing") do
+    var app = counter_app.()
+    let dirty = app.flush
+    var surface = RecordingSurface.new
+    paint_dirty(&app, &var surface, &dirty)
+    t.expect(surface.size).to_eq(0)
+  end
+end
