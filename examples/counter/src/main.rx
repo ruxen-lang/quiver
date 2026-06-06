@@ -1,0 +1,66 @@
+## counter — the "hello world" of reactive GUI, and the first vertical
+## slice that proves the Ruxen GUI stack end-to-end (canvas L1 ↔ quiver L2).
+##
+## Tap the button, the number increments, ONLY the count node repaints.
+##
+## The desktop window path needs canvas L1 (Window.open + the event stream
+## + a Skia-backed Canvas), which is still a scaffold. Until it lands, this
+## binary runs the SAME quiver app headlessly: it paints onto quiver's
+## RecordingSurface and feeds synthetic pointer events through the real
+## dispatch / reactive / targeted-repaint pipeline. When canvas L1 ships,
+## the loop below swaps the synthetic taps for the engine's event stream
+## and a Skia PaintSurface adapter — quiver itself is already done.
+##
+## (The surface is quiver's RecordingSurface rather than an app-defined
+## PaintSurface impl: ruxen v1 does not yet monomorphize a dependency's
+## generic functions for types defined in the consuming package.)
+
+## Print the commands recorded since `from`, returning the new size.
+def narrate(surface: &RecordingSurface, from: Int) -> Int
+  var i = from
+  let n = surface.size
+  while i < n
+    puts "  #{surface.command_at(i)}"
+    i = i + 1
+  end
+  n
+end
+
+def main
+  puts "quiver counter — L2 core slice demo"
+  puts ""
+
+  # The desktop path: opens once canvas L1 lands.
+  match Window.open(String.from("Counter"), 320, 240)
+    Ok(_)  -> puts "canvas window opened"
+    Err(e) -> puts "(no window: #{e})"
+  end
+  puts ""
+
+  # The quiver app — identical to what the windowed path will run.
+  var app = App.build({ |ui: &var Ui, root: &var Col|
+    let count = ui.state(0)
+    root.text("Counter")
+    root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
+    root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+  })
+
+  var surface = RecordingSurface.new
+  puts "first frame (full paint):"
+  first_frame(&app, &var surface)
+  var seen = narrate(&surface, 0)
+
+  var taps = 0
+  while taps < 3
+    puts ""
+    puts "pointer down on the button -> targeted repaint:"
+    app.pointer_down(2, row_height() * 2 + 2)
+    let repainted = frame(&var app, &var surface)
+    seen = narrate(&surface, seen)
+    puts "  (#{repainted} node repainted — static nodes untouched)"
+    taps = taps + 1
+  end
+
+  puts ""
+  puts "final state: '#{app.text_of(1)}'"
+end
