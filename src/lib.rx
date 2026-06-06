@@ -1,0 +1,79 @@
+## quiver — L2 framework for the Ruxen GUI stack.
+##
+## Fine-grained reactive signals + a Ruby-block DSL + layout + paint/diff +
+## event dispatch, built on top of the L1 engine (`canvas`). This layer is
+## **100% safe, platform-agnostic Ruxen** — no `unsafe`, no FFI, no
+## platform-specific code (that all lives in `canvas`).
+##
+## Status: SCAFFOLD. The bodies below are placeholders; see `docs/` for the
+## reactive model (`REACTIVITY.md`) and the DSL rules (`DSL.md`).
+
+## A `Copy` handle to a piece of reactive state stored in the signal arena.
+##
+## The handle is an index into the UI root's arena runtime — never a reference
+## — so fine-grained reactivity coexists with the borrow checker (no aliasing
+## fight). Teardown is deterministic via the runtime's drop (no GC). See
+## `docs/REACTIVITY.md`.
+##
+## NOTE: methods on a generic value type are attached via a `class Signal[T]`
+## block — Ruxen brings the type parameter `T` into method scope for generic
+## `class` declarations (not bare `struct` declarations), so the field and the
+## methods live together in one block.
+class Signal[T]
+  ## Opaque index into the arena runtime.
+  id: Int
+
+  ## Read the current value, subscribing the enclosing tracking scope.
+  def get -> T
+    panic!("quiver: Signal.get (scaffold)")
+  end
+
+  ## Replace the value and notify subscribers (re-runs only their scopes).
+  def var set(value: T) -> nil
+    panic!("quiver: Signal.set (scaffold)")
+  end
+
+  ## Update the value in place via a block, then notify subscribers.
+  def var update(block: Fn(T) -> T) -> nil
+    panic!("quiver: Signal.update (scaffold)")
+  end
+end
+
+## A node in the widget tree. Built once by the DSL; painted onto `canvas`.
+struct Widget
+  id: Int
+end
+
+## A vertical container. The trailing block builds its children once.
+##
+##   column do
+##     text("Counter")
+##     text { "count: #{count.get}" }   # reactive: re-runs ONLY this node
+##   end
+def column(block: Fn() -> Widget) -> Widget
+  panic!("quiver: column (scaffold)")
+end
+
+## A text node.
+##
+## - `text("literal")`       → static content, built once, never re-evaluated.
+## - `text { "#{sig.get}" }` → a *tracking scope*: subscribes to the signals
+##   read inside the block and re-runs ONLY this node when they change.
+def text(content: String) -> Widget
+  panic!("quiver: text (static) (scaffold)")
+end
+
+## A button with a static label and a trailing click-handler block.
+##
+##   button("tap") do
+##     count.update { |c| c + 1 }
+##   end
+def button(label: String, on_click: Fn() -> nil) -> Widget
+  panic!("quiver: button (scaffold)")
+end
+
+## Run an app: open a `canvas` window, build the root widget, and drive the
+## event loop (dispatch events → targeted repaint) until the window closes.
+def run(title: String, root: Fn() -> Widget) -> Result[nil, String]
+  Err(String.from("quiver: run is not implemented yet (scaffold)"))
+end
