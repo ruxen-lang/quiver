@@ -59,4 +59,32 @@ Tester.describe("paint — full and targeted") do |t: &var Tester|
     paint_dirty(&app, &var surface, &dirty)
     t.expect(surface.size).to_eq(0)
   end
+
+  t.it("structured mirror exposes each command as numeric fields for replay") do
+    var app = counter_app.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # cmd 0: clear(255,255,255)
+    t.expect(surface.op_at(0)).to_eq(op_clear())
+    t.expect(surface.r_at(0)).to_eq(255)
+    # cmd 1: text 'Counter' at baseline (4,16)
+    t.expect(surface.op_at(1)).to_eq(op_text())
+    t.expect(surface.x_at(1)).to_eq(4)
+    t.expect(surface.y_at(1)).to_eq(16)
+    t.expect(surface.text_at(1)).to_eq(String.from("Counter"))
+    # cmd 3: the button's grey box rect(0,48,32,24,200,200,200)
+    t.expect(surface.op_at(3)).to_eq(op_rect())
+    t.expect(surface.w_at(3)).to_eq(32)
+    t.expect(surface.h_at(3)).to_eq(24)
+    t.expect(surface.g_at(3)).to_eq(200)
+  end
+
+  t.it("reset clears both the string log and the structured mirror") do
+    var app = counter_app.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    surface.reset
+    t.expect(surface.size).to_eq(0)
+    t.expect(surface.op_at(0)).to_eq(-1)
+  end
 end

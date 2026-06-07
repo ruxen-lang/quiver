@@ -20,27 +20,67 @@ mixin PaintSurface
   def draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
 end
 
-## A PaintSurface that records draw commands as strings — the headless
-## test double that pins paint output without a window.
+## Display-list op codes (plain Ints, like the node kinds in `dsl.rx`).
+def op_clear -> Int { 0 }
+def op_rect -> Int { 1 }
+def op_text -> Int { 2 }
+
+## The one concrete PaintSurface. It records every primitive twice over:
+##   - as a formatted STRING (`command_at` — the headless double the test
+##     suite pins), and
+##   - as STRUCTURED numeric fields in parallel arrays (`op_at`/`x_at`/… —
+##     the bridge a real backend replays onto canvas's Skia `Canvas`).
+##
+## One surface, not two, on purpose: ruxen v1 only resolves quiver's generic
+## paint pass (`paint_all`/`paint_dirty`) when `PaintSurface` has a SINGLE
+## implementor — it devirtualises the call rather than truly monomorphising,
+## so a second impl makes the generic body emit an unresolved
+## `S: PaintSurface_*` symbol that fails to link. An app binary therefore
+## drives THIS type and reads the structured fields back to paint the window.
+## Stays 100% canvas-free: only Ints and Strings cross this boundary.
 class RecordingSurface
   include PaintSurface
 
+  ## Formatted command log (pinned by the test suite).
   commands: Array[String]
+  ## Structured mirror: op code + geometry + color, one entry per command.
+  ops: Array[Int]
+  xs: Array[Int]
+  ys: Array[Int]
+  ws: Array[Int]
+  hs: Array[Int]
+  rs: Array[Int]
+  gs: Array[Int]
+  bs: Array[Int]
+  ## Text payload for op_text commands ("" otherwise).
+  texts: Array[String]
 
   def init
     self.commands = Array.new
+    self.ops = Array.new
+    self.xs = Array.new
+    self.ys = Array.new
+    self.ws = Array.new
+    self.hs = Array.new
+    self.rs = Array.new
+    self.gs = Array.new
+    self.bs = Array.new
+    self.texts = Array.new
   end
 
   def var fill_clear(r: Int, g: Int, b: Int) -> nil
     self.commands.push("clear(#{r},#{g},#{b})")
+    self.record(op_clear(), 0, 0, 0, 0, r, g, b, String.from(""))
   end
 
   def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
     self.commands.push("rect(#{x},#{y},#{w},#{h},#{r},#{g},#{b})")
+    self.record(op_rect(), x, y, w, h, r, g, b, String.from(""))
   end
 
   def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
     self.commands.push("text('#{text}',#{x},#{y})")
+    self.record(op_text(), x, y, 0, 0, r, g, b, text.clone)
   end
 
   def size -> Int
@@ -52,6 +92,84 @@ class RecordingSurface
       Some(s) -> s.clone
       nil     -> String.from("")
     end
+  end
+
+  ## Drop all recorded commands (reuse the buffer across frames).
+  def var reset -> nil
+    self.commands = Array.new
+    self.ops = Array.new
+    self.xs = Array.new
+    self.ys = Array.new
+    self.ws = Array.new
+    self.hs = Array.new
+    self.rs = Array.new
+    self.gs = Array.new
+    self.bs = Array.new
+    self.texts = Array.new
+  end
+
+  ## Op code of command `i` (op_clear / op_rect / op_text), or -1.
+  def op_at(i: Int) -> Int
+    match self.ops.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  def x_at(i: Int) -> Int
+    RecordingSurface.int_at(&self.xs, i)
+  end
+
+  def y_at(i: Int) -> Int
+    RecordingSurface.int_at(&self.ys, i)
+  end
+
+  def w_at(i: Int) -> Int
+    RecordingSurface.int_at(&self.ws, i)
+  end
+
+  def h_at(i: Int) -> Int
+    RecordingSurface.int_at(&self.hs, i)
+  end
+
+  def r_at(i: Int) -> Int
+    RecordingSurface.int_at(&self.rs, i)
+  end
+
+  def g_at(i: Int) -> Int
+    RecordingSurface.int_at(&self.gs, i)
+  end
+
+  def b_at(i: Int) -> Int
+    RecordingSurface.int_at(&self.bs, i)
+  end
+
+  def text_at(i: Int) -> String
+    match self.texts.get(i)
+      Some(s) -> s.clone
+      nil     -> String.from("")
+    end
+  end
+
+  private
+
+  def self.int_at(arr: &Array[Int], i: Int) -> Int
+    match arr.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def var record(op: Int, x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int, text: String) -> nil
+    self.ops.push(op)
+    self.xs.push(x)
+    self.ys.push(y)
+    self.ws.push(w)
+    self.hs.push(h)
+    self.rs.push(r)
+    self.gs.push(g)
+    self.bs.push(b)
+    self.texts.push(text)
   end
 end
 

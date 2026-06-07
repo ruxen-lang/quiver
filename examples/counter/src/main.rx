@@ -1,19 +1,40 @@
-## counter — the "hello world" of reactive GUI, and the first vertical
-## slice that proves the Ruxen GUI stack end-to-end (canvas L1 ↔ quiver L2).
+## counter — the "hello world" of reactive GUI, and the first vertical slice
+## that proves the Ruxen GUI stack end-to-end (canvas L1 ↔ quiver L2).
 ##
-## Tap the button, the number increments, ONLY the count node repaints.
+## Tap the button, the number increments, and the frame repaints. quiver runs
+## the reactive/dispatch/paint pipeline; this binary is the thin desktop shell
+## that bridges quiver's platform-free `RecordingSurface` to canvas's Skia
+## `Canvas` (a binary is the only place ruxen v1 lets both packages' symbols
+## meet — library builds don't merge dependency sources).
 ##
-## The desktop window path needs canvas L1 (Window.open + the event stream
-## + a Skia-backed Canvas), which is still a scaffold. Until it lands, this
-## binary runs the SAME quiver app headlessly: it paints onto quiver's
-## RecordingSurface and feeds synthetic pointer events through the real
-## dispatch / reactive / targeted-repaint pipeline. When canvas L1 ships,
-## the loop below swaps the synthetic taps for the engine's event stream
-## and a Skia PaintSurface adapter — quiver itself is already done.
-##
-## (The surface is quiver's RecordingSurface rather than an app-defined
-## PaintSurface impl: ruxen v1 does not yet monomorphize a dependency's
-## generic functions for types defined in the consuming package.)
+## With a display + SDL2 it opens a live OS window and is driven by the real
+## event stream; headless (CI, no display) it falls back to synthetic taps so
+## the same pipeline still runs and prints its paint output.
+
+## Replay quiver's recorded paint commands onto a real canvas. quiver records
+## into its `RecordingSurface` (the single PaintSurface impl its generic paint
+## pass resolves against); here we read the structured mirror back out and
+## issue the matching Skia draw calls — the L2->L1 seam, all in the app binary.
+def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
+  var i = 0
+  let n = surface.size
+  while i < n
+    let op = surface.op_at(i)
+    let col = Color.rgb(surface.r_at(i) as UInt8, surface.g_at(i) as UInt8, surface.b_at(i) as UInt8)
+    if op == op_clear()
+      let _ = canvas.clear(col)
+    elsif op == op_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.draw_rect(rect, col)
+    else
+      let label = surface.text_at(i)
+      let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)
+    end
+    i = i + 1
+  end
+end
 
 ## Print the commands recorded since `from`, returning the new size.
 def narrate(surface: &RecordingSurface, from: Int) -> Int
@@ -27,40 +48,100 @@ def narrate(surface: &RecordingSurface, from: Int) -> Int
 end
 
 def main
-  puts "quiver counter — L2 core slice demo"
-  puts ""
-
-  # The desktop path: opens once canvas L1 lands.
-  match Window.open(String.from("Counter"), 320, 240)
-    Ok(_)  -> puts "canvas window opened"
-    Err(e) -> puts "(no window: #{e})"
+  puts "quiver counter — live window demo"
+  let w = 200
+  let h = 96
+  match Window.open(String.from("Counter"), w, h)
+    Ok(win) -> drive(win)
+    Err(e)  -> puts "cannot create canvas: #{e}"
   end
-  puts ""
+end
 
-  # The quiver app — identical to what the windowed path will run.
+## Own the window, build the quiver app, and run it — windowed if an OS window
+## opens, otherwise headless.
+def drive(win0: Window) -> nil
+  var win = win0
+
+  # The quiver app: identical whether driven by real events or synthetic taps.
   var app = App.build({ |ui: &var Ui, root: &var Col|
     let count = ui.state(0)
     root.text("Counter")
     root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
-    root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+    root.button("tap +1", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
   })
-
   var surface = RecordingSurface.new
-  puts "first frame (full paint):"
-  first_frame(&app, &var surface)
-  var seen = narrate(&surface, 0)
 
-  var taps = 0
-  while taps < 3
-    puts ""
-    puts "pointer down on the button -> targeted repaint:"
-    app.pointer_down(2, row_height() * 2 + 2)
-    let repainted = frame(&var app, &var surface)
-    seen = narrate(&surface, seen)
-    puts "  (#{repainted} node repainted — static nodes untouched)"
-    taps = taps + 1
+  let shown = match win.show_scaled(3)
+    Ok(_)  -> true
+    Err(e) -> announce_headless(e)
   end
 
-  puts ""
-  puts "final state: '#{app.text_of(1)}'"
+  if !shown
+    # -- Headless: synthetic taps through the real pipeline --
+    puts ""
+    puts "first frame (full paint):"
+    paint_all(&app, &var surface)
+    narrate(&surface, 0)
+    var taps = 0
+    while taps < 3
+      puts ""
+      puts "pointer down on the button -> repaint:"
+      app.pointer_down(2, row_height() * 2 + 2)
+      let dirty = app.flush
+      if (dirty.size as Int) > 0
+        surface.reset
+        paint_all(&app, &var surface)
+        narrate(&surface, 0)
+      end
+      taps = taps + 1
+    end
+    puts ""
+    puts "final state: '#{app.text_of(1)}'"
+    return
+  end
+
+  # -- Windowed: first frame, then the live event loop --
+  paint_all(&app, &var surface)
+  blit(&var win, &surface)
+
+  var running = true
+  while running
+    match win.poll_event
+      Some(ev) -> match ev
+        Event.PointerDown(x, y) -> app.pointer_down(x, y)
+        Event.CloseRequested    -> running = false
+        Event.PointerMove(x, y) -> nil
+        Event.PointerUp(x, y)   -> nil
+        Event.KeyDown(k)        -> nil
+        Event.Resize(ww, hh)    -> nil
+      end
+      nil -> nil
+    end
+    let dirty = app.flush
+    if (dirty.size as Int) > 0
+      surface.reset
+      paint_all(&app, &var surface)
+      blit(&var win, &surface)
+    end
+    win.sleep_ms(16)
+  end
+  win.hide
+end
+
+## Draw the recorded frame to the OS window: begin a frame, replay onto the
+## canvas, end the frame, and present.
+def blit(win: &var Window, surface: &RecordingSurface) -> nil
+  match win.canvas.begin_frame
+    Ok(_)  -> nil
+    Err(e) -> puts "begin_frame: #{e}"
+  end
+  replay(surface, &var win.canvas)
+  let _ = win.canvas.end_frame
+  let _ = win.present
+end
+
+## Single-statement match-arm helper: report the headless fallback, yield false.
+def announce_headless(e: String) -> Bool
+  puts "(no OS window: #{e}) — running headless"
+  false
 end

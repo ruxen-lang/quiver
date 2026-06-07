@@ -7,6 +7,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Milestone 1 (L1 integration): the counter runs as a live window.**
+  `examples/counter` opens a scaled SDL2 window over canvas's Skia `Canvas`
+  and drives repaint from the real engine event stream (`PointerDown` →
+  dispatch → flush → repaint, `CloseRequested` → quit), falling back to
+  synthetic taps headlessly so CI still runs the whole pipeline.
+- **Structured paint recording** on `RecordingSurface`: alongside the string
+  command log, each primitive is recorded as numeric fields
+  (`op_at`/`x_at`/`y_at`/`w_at`/`h_at`/`r_at`/`g_at`/`b_at`/`text_at`) plus
+  `op_clear`/`op_rect`/`op_text` codes and a `reset`. This is the canvas-free
+  bridge an app binary `replay`s onto a real backend — kept as the single
+  `PaintSurface` impl because ruxen v1 only resolves quiver's generic paint
+  pass with one implementor. Pinned by 2 new tests (42 total).
 - **Milestone 1 (L2 side): the counter core slice**, fully implemented and
   pinned by 37 headless tests:
   - Reactive core: `Ui` subscription graph + `State[T]` handles

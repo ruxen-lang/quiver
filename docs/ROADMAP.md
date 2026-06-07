@@ -31,14 +31,26 @@ All five core-slice items are implemented and pinned by tests
 **Demo:** `examples/counter` — runs the real pipeline headlessly today and
 prints each paint command; the window path activates when canvas L1 lands.
 
-## Milestone 1, remaining — the canvas (L1) side
+## Milestone 1, canvas (L1) side ✅
 
-Blocked on `canvas` Milestone 1 (SDL window + Skia surface + event pump):
+Now that `canvas` Milestone 1 has landed (live SDL2 window + Skia surface +
+event stream), `examples/counter` runs as a real windowed app:
 
-- A `PaintSurface` adapter over canvas's `Canvas` (lives in the app shell /
-  a `quiver-canvas` glue package — ruxen v1 library builds cannot see
-  dependency symbols, so it cannot live in quiver's own `src/`).
-- Swap `examples/counter`'s synthetic taps for the engine event stream.
+- **Structured paint recording** — `RecordingSurface` records each primitive
+  both as a string (test double) and as numeric fields (`op_at`/`x_at`/…).
+  The app binary `replay`s those onto canvas's Skia `Canvas`. The bridge is a
+  single `PaintSurface` impl on purpose: ruxen v1 only resolves quiver's
+  generic paint pass when the mixin has one implementor (it devirtualises
+  rather than monomorphising), and it cannot monomorphise a dependency's
+  generic for a type defined in the consuming app — so the structured surface
+  lives in quiver and the canvas glue lives in the binary.
+- **Live event loop** — `examples/counter` opens a scaled OS window, paints
+  the first frame, and drives repaint from the real `poll_event` stream
+  (`PointerDown` → dispatch → flush → repaint; `CloseRequested` → quit). It
+  falls back to synthetic taps when there is no display, so headless/CI runs
+  still exercise the whole pipeline.
+- Verified end-to-end by offscreen pixel readback (white background + grey
+  button box through real Skia, `skia_active = true`).
 
 ## Resolved open decisions
 
