@@ -9,6 +9,6 @@ type = "library"
 
 [dependencies]
 # L2 depends on the L1 engine for windowing, input, and the 2D canvas.
-# Local path dependency while both packages are developed side-by-side under
-# ~/Documents; switch to a version/git dependency once published.
-canvas = { path = "../canvas" }
+# Published git dependency so anyone depending on quiver pulls canvas
+# transitively — no need to vendor or path-link L1 by hand.
+canvas = { git = "https://github.com/ruxen-lang/canvas.git", branch = "master" }

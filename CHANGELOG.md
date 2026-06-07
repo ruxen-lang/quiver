@@ -35,6 +35,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   background are distinguishable in tests.
 
 ### Changed
+- The `canvas` (L1) dependency now resolves from its published git repository
+  (`https://github.com/ruxen-lang/canvas.git`, `master`) instead of a local
+  `../canvas` path, so anyone depending on `quiver` pulls L1 transitively
+  without vendoring or path-linking it by hand.
 - Public API renamed/reshaped from the design sketch where ruxen v1 forced
   it: `State[T]` (not `Signal[T]` — std collision), explicit `&var Ui`
   parameter (no globals in safe Ruxen), `dyn_text` as its own method (the
