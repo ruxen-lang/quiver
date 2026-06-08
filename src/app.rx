@@ -82,19 +82,11 @@ class App
   end
 
   ## Current display text of node `i`: reactive cache, else static label.
-  ##
-  ## The `size > 0` guard is load-bearing: `key?`/`get` on an EMPTY
-  ## `Hash[Int,String]` segfaults in this ruxen build (CLAUDE.md Q25), and a
-  ## tree with no `dyn_text` node leaves the cache empty. Only `dyn_text`
-  ## nodes are ever cached, so an empty cache means "all static" — fall
-  ## straight through to the label.
+  ## Only `dyn_text` nodes are ever cached; a cache miss means "static" — fall
+  ## through to the label.
   def text_of(i: Int) -> String
-    if self.cache.size as Int > 0
-      if self.cache.key?(i)
-        if let Some(s) = self.cache.get(i)
-          return s.clone
-        end
-      end
+    if let Some(s) = self.cache.get(i)
+      return s.clone
     end
     self.root.label_at(i)
   end
@@ -247,12 +239,6 @@ class App
   end
 
   def x_of(i: Int) -> Int
-    if self.geom_x.size as Int == 0
-      return 0
-    end
-    if !self.geom_x.key?(i)
-      return 0
-    end
     match self.geom_x.get(i)
       Some(v) -> *v
       nil     -> 0
@@ -260,12 +246,6 @@ class App
   end
 
   def y_of(i: Int) -> Int
-    if self.geom_y.size as Int == 0
-      return 0
-    end
-    if !self.geom_y.key?(i)
-      return 0
-    end
     match self.geom_y.get(i)
       Some(v) -> *v
       nil     -> 0
@@ -273,12 +253,6 @@ class App
   end
 
   def w_of(i: Int) -> Int
-    if self.geom_w.size as Int == 0
-      return 0
-    end
-    if !self.geom_w.key?(i)
-      return 0
-    end
     match self.geom_w.get(i)
       Some(v) -> *v
       nil     -> 0
@@ -286,12 +260,6 @@ class App
   end
 
   def h_of(i: Int) -> Int
-    if self.geom_h.size as Int == 0
-      return 0
-    end
-    if !self.geom_h.key?(i)
-      return 0
-    end
     match self.geom_h.get(i)
       Some(v) -> *v
       nil     -> 0

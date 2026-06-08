@@ -88,9 +88,9 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       recursive type; node id = build order. Pinned by `tests/nesting.rx`.
 - [x] **`Row` + generic containers** — `Col.row { |c| … }` / `Col.col { |c| … }`
       build container nodes; block-built nodes become their children; nesting is
-      arbitrary. First slice (`Row` of texts / `Col`s) laid out + painted, pinned
-      by `tests/row.rx`. (Reactive children inside a container deferred behind
-      ruxen Q26 — see Known limitations below.)
+      arbitrary. `Row` of texts/`Col`s laid out + painted, AND reactive children
+      (`dyn_text`/`button`) inside containers now re-render on state change
+      (ruxen Q26 fixed). Pinned by `tests/row.rx` + `tests/nesting.rx`.
 
 ### Layout (needs a decision, then implement)
 
@@ -123,14 +123,12 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       need cross-package generic monomorphization. **→ ruxen Q17.**
 - [ ] **Unit-test quiver's public API directly** — `ruxen test` can't link the
       package, so behavior is pinned through the binary. **→ ruxen Q16.**
-- [ ] **Reactive children inside a container** (`dyn_text`/`button` in a
-      `row`/`col`) — blocked by **ruxen Q26**: a capturing closure stored under
-      the container's `&var *self` reborrow has its captures corrupted (wrong
-      Int / SIGSEGV for a captured class handle). Static `text` children work.
-      `tests/nesting.rx` holds the reactive-child assertion as `xit` pending;
-      re-enable when ruxen fixes capture under the self-reborrow. Repro in
-      `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
-- [ ] **Empty-hash lookups** (**ruxen Q25**) — `Hash.key?`/`get` on an empty hash
-      segfault and `&Hash` params are unsound; quiver works around both (direct
-      field access guarded by `size > 0`). Repro in
+- [x] **Reactive children inside a container** (`dyn_text`/`button` in a
+      `row`/`col`) — **ruxen Q26 fixed (2026-06-08)**: captures survive the
+      container's `&var *self` reborrow, so reactive children re-render on state
+      change just like top-level nodes. Pinned by `tests/nesting.rx`.
+- [x] **Empty-hash lookups** (**ruxen Q25 fixed, 2026-06-08**) — `Hash.key?`/`get`
+      on an empty hash no longer segfault; `&Hash`/`&Set` params now reject at
+      compile time. quiver's `size > 0` workaround guards were removed (lookups
+      are plain `match h.get(i)`). Repro kept for history in
       `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.

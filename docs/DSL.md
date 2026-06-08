@@ -77,19 +77,27 @@ it, run the block, then restore the cursor — so nesting is arbitrary. The
 layout pass (`App.arrange`, docs/LAYOUT.md) walks this tree; containers paint
 nothing, their children paint themselves.
 
-### Deviation: reactive children inside a container are deferred (ruxen Q26)
+### Reactive children inside a container — fully supported
 
-The first slice ships **static `text`** inside `row`/`col`. A `dyn_text` or
-`button` built *inside* a container would store a closure that captures state
-(e.g. a `State` handle), and in this ruxen build a capturing closure stored
-through the container's `build.(&var *self)` self-reborrow has its captures
-**corrupted** (wrong value for an `Int`; SIGSEGV for a captured class handle).
-The top-level `App.build` is unaffected (it invokes the builder as
-`f.(&var local.field)`, never a self-reborrow). So reactive *children* are
-held behind ruxen Q26 — `tests/nesting.rx` keeps that assertion as an `xit`
-pending, and reactive content lives at the top level until ruxen fixes
-capture under the reborrow. See `CLAUDE.md` landmines (Q26) and
-`tmp/test-cache/ruxen-closure-capture-reborrow.md`.
+`dyn_text` and `button` work as container children, not just at the top level:
+the closures they store keep their captured `State` handles, so a reactive
+child re-renders on state change and a button child can mutate state, exactly
+like a top-level node.
+
+```ruxen
+root.row({ |c: &var Col|
+  c.dyn_text({ |ui| "n: #{count.get(ui)}" })            # re-renders on change
+  c.button("tap", { |ui| count.update(ui, { |x| x + 1 }) })  # mutates state
+})
+```
+
+This depended on ruxen **Q26** — a capturing closure stored through a
+container's `build.(&var *self)` self-reborrow used to lose its captures
+(wrong `Int`; SIGSEGV for a captured class handle). Q26 was fixed and
+installed (2026-06-08); `tests/nesting.rx` pins it ("a dyn_text child
+re-renders when a button child mutates its state"). The targeted-repaint
+invariant holds through containers: a child state change flushes and repaints
+exactly the subscribed child, never its container or siblings.
 
 ## Why it must stay pinned with tests
 

@@ -86,14 +86,10 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
     t.expect(col.first_child_of(1)).to_eq(2)
   end
 
-  # KNOWN ruxen LIMITATION (CLAUDE.md Q26): a closure that CAPTURES a value
-  # and is stored from inside a container build block (`row`/`col`, which
-  # invoke `build.(&var *self)`) has its captures corrupted — invoking the
-  # stored compute later reads garbage and segfaults for a captured class
-  # handle (e.g. a `State`). Static `text` children are unaffected (no
-  # capture), which is the first-slice content. Re-enable when ruxen fixes
-  # closure-capture under the self-reborrow.
-  t.xit("a reactive child subscribes through the Ui (blocked: ruxen Q26)") do
+  # ruxen Q26 (capture-through-`&var *self`-reborrow) is FIXED: a closure
+  # built inside a container block keeps its captures, so reactive children
+  # (dyn_text/button) work exactly like top-level ones.
+  t.it("a reactive child subscribes through the Ui from inside a container") do
     var ui = Ui.new
     let count = ui.state(7)
     var col = Col.new
@@ -108,5 +104,26 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
     ui.current_scope = -1
     t.expect(out).to_eq(String.from("n: 7"))
     t.expect(ui.subs.size as Int).to_eq(1)
+  end
+
+  t.it("a dyn_text child re-renders when a button child mutates its state") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let count = ui.state(0)
+      root.text("title")                                              # 0
+      root.row({ |c: &var Col|                                        # 1
+        c.dyn_text({ |ui2: &var Ui| "n: #{count.get(ui2)}" })         # 2
+        c.button("tap", { |ui2: &var Ui| count.update(ui2, { |x| x + 1 }) }) # 3
+      })
+    })
+    # mount rendered the reactive child against live state
+    t.expect(app.text_of(2)).to_eq(String.from("n: 0"))
+    # clicking the button child mutates state; flush refreshes ONLY the
+    # subscribed dyn_text child (node 2), not the static title or the button
+    app.click(3)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(1)
+    ArrayMatcher.new(&refreshed).to_include(2)
+    t.expect(app.text_of(2)).to_eq(String.from("n: 1"))
+    t.expect(app.text_of(0)).to_eq(String.from("title"))
   end
 end

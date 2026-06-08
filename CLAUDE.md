@@ -65,23 +65,25 @@ ruxen fmt <file>                  # canonical formatting
   `#` comments at file top. Generic functions don't monomorphize for types
   defined in a *consuming* package (keep mixin impls used by quiver generics
   inside quiver).
-- **Q25 (ruxen ledger) — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTS** (any value type;
-  `ruxen check` passes, runtime SIGSEGVs). `Hash.size` is safe. Guard every
-  lookup: `if h.size as Int > 0 { … h.key?/get … }`. Repro + boundary in
+- **Q25 (ruxen ledger) — RESOLVED 2026-06-08.** `Hash.key?`/`get` on an EMPTY
+  hash used to SEGFAULT; **fixed and installed** — empty-hash lookups now return
+  `false`/`nil` cleanly (verified Int + String value types). The defensive
+  `if h.size as Int > 0` guards quiver added were removed; lookups are now plain
+  `match h.get(i) { … nil -> sentinel }`. Repro kept for history in
   `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.
 - **`&Hash[...]` / `&Set[...]` parameter types are unsound** — `Hash`/`Set` are
-  mixins without runtime dispatch. A *free fn* errors `E1118`; a *method* with a
-  `&Hash` param compiles then SEGFAULTS. Never pass a collection by `&` to a
-  helper — access the field directly (`self.<field>.get`, guarded by Q25).
-- **Q26 (ruxen ledger) — a capturing closure STORED from inside a self-reborrow build block
-  corrupts its captures.** `def var container(build) … build.(&var *self)` then
-  inside `c.dyn_text({ |ui| count.get(ui) })`: the stored closure's captured
-  `count` reads as garbage (wrong Int; SEGFAULT for a captured class handle).
-  The top-level `App.build` (`f.(&var local.field)`, no self-reborrow) is fine.
-  So static `text` children in `row`/`col` work; reactive `dyn_text`/`button`
-  children are blocked until ruxen fixes capture under the reborrow. Repro:
-  `col.row({ |c| c.dyn_text({ |ui| count.get(ui) }) })` → invoking the compute
-  segfaults (`count.peek` before invocation is still correct).
+  mixins without runtime dispatch. Both *free fns* and *methods* now reject a
+  `&Hash`/`&Set` param at compile time (`E1118`; the silent-method-miscompile
+  facet was fixed alongside Q25). Still: don't pass a collection by `&` — access
+  the field directly (`self.<field>.get`).
+- **Q26 (ruxen ledger) — RESOLVED 2026-06-08.** A capturing closure stored from
+  inside a self-reborrow build block (`def var container(build) … build.(&var
+  *self)`) used to lose its captures (wrong Int; SEGFAULT for a captured class
+  handle). **Fixed and installed** — reactive `dyn_text`/`button` children inside
+  `row`/`col` now keep their captured `State` handles and work exactly like
+  top-level reactive nodes (pinned by `tests/nesting.rx`: "a dyn_text child
+  re-renders when a button child mutates its state"). Repro (now passing) in
+  `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
 
 ### Q18 — RESOLVED 2026-06-08: stale divergent install (NOT a master bug)
 

@@ -19,7 +19,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`root_first`/`root_last`) and a build cursor. No recursive type anywhere;
   node id is still build order. New arena accessors: `parent_of`,
   `first_child_of`, `next_sibling_of`, `root_head`, `container_at`. Pinned by
-  `tests/nesting.rx` (5 tests + 1 pending).
+  `tests/nesting.rx`.
 - **`Row` / `Col` containers + nested own-flex layout pass.** `Col.row { |c| … }`
   and `Col.col { |c| … }` build container nodes whose block-built nodes become
   their children. `App.arrange` now recursively walks the nested arena: a flat
@@ -27,22 +27,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recursion stacks each container's children along its axis (`Row` = X,
   `Col` = Y) and the top level as an implicit column — writing the same
   `geom_x/y/w/h` the paint/hit-test passes already read. Containers paint
-  nothing (their children paint themselves). Pinned by `tests/row.rx` (5 tests).
-  Suite: **52 passed, 1 pending** (the two `app.rx`/`counter.rx` pins stayed
-  green).
+  nothing (their children paint themselves). Pinned by `tests/row.rx`.
+- **Reactive children inside containers.** `dyn_text` and `button` work as
+  `row`/`col` children: a reactive child re-renders on state change, a button
+  child mutates state, and the targeted-repaint invariant holds (a child state
+  change repaints exactly the subscribed child, not its container or siblings).
+  Pinned by `tests/nesting.rx` ("a dyn_text child re-renders when a button
+  child mutates its state"). Suite: **54 passed, 0 pending** (the two
+  `app.rx`/`counter.rx` pins stayed green and untouched).
 
-### Known limitations (ruxen, deferred)
-- **Reactive children inside a container** (`dyn_text`/`button` built inside
-  `row`/`col`) are deferred: a capturing closure stored under the container's
-  `&var *self` reborrow has its captures corrupted in this ruxen build
-  (**Q26** — wrong Int / SIGSEGV for a captured `State` handle). Static `text`
-  children — the first-slice content — are unaffected. `tests/nesting.rx`
-  keeps the reactive-child assertion as an `xit` pending. Repro:
-  `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
-- **Empty-hash lookups segfault** (**Q25**): `Hash.key?`/`get` on an empty hash
-  SIGSEGVs; `&Hash` parameters are unsound (silent miscompile on methods). All
-  quiver hash reads were hardened — direct field access guarded by
-  `size as Int > 0`. Repro: `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.
+### Changed
+- Dropped the defensive empty-hash `size as Int > 0` / `key?` guards from the
+  arena and geometry accessors (`Col.first_child_of`/`next_sibling_of`/
+  `parent_of`/`append_child`, `App.x_of`/`y_of`/`w_of`/`h_of`/`text_of`): ruxen
+  **Q25** is fixed, so empty-hash `get` is safe and these are plain
+  `match h.get(i)` again.
+
+### Fixed (ruxen, now resolved)
+- **Q26** — capturing closures stored through a container's `&var *self`
+  reborrow now keep their captures, unblocking reactive children in containers.
+- **Q25** — `Hash.key?`/`get` on an empty hash no longer segfault; `&Hash`/
+  `&Set` params reject at compile time. Repros kept for history under
+  `tmp/test-cache/`.
 
 - **Milestone 1 (L1 integration): the counter runs as a live window.**
   `examples/counter` opens a scaled SDL2 window over canvas's Skia `Canvas`

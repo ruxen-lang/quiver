@@ -168,12 +168,6 @@ class Col
 
   ## First child of node `i`, or -1 (leaf / out of range).
   def first_child_of(i: Int) -> Int
-    if self.child_first.size as Int == 0
-      return -1
-    end
-    if !self.child_first.key?(i)
-      return -1
-    end
     match self.child_first.get(i)
       Some(v) -> *v
       nil     -> -1
@@ -182,12 +176,6 @@ class Col
 
   ## Next sibling of node `i`, or -1 (last child / out of range).
   def next_sibling_of(i: Int) -> Int
-    if self.child_next.size as Int == 0
-      return -1
-    end
-    if !self.child_next.key?(i)
-      return -1
-    end
     match self.child_next.get(i)
       Some(v) -> *v
       nil     -> -1
@@ -196,12 +184,6 @@ class Col
 
   ## Parent of node `i`, or -1 (a top-level root / out of range).
   def parent_of(i: Int) -> Int
-    if self.parent.size as Int == 0
-      return -1
-    end
-    if !self.parent.key?(i)
-      return -1
-    end
     match self.parent.get(i)
       Some(v) -> *v
       nil     -> -1
@@ -266,12 +248,9 @@ class Col
 
   ## Append `id` to container `cid`'s child chain.
   def var append_child(cid: Int, id: Int) -> nil
-    var last = -1
-    if self.child_last.key?(cid)
-      last = match self.child_last.get(cid)
-        Some(v) -> *v
-        nil     -> -1
-      end
+    let last = match self.child_last.get(cid)
+      Some(v) -> *v
+      nil     -> -1
     end
     if last < 0
       self.child_first.insert(cid, id)
