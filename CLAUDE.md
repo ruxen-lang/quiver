@@ -65,15 +65,15 @@ ruxen fmt <file>                  # canonical formatting
   `#` comments at file top. Generic functions don't monomorphize for types
   defined in a *consuming* package (keep mixin impls used by quiver generics
   inside quiver).
-- **Q19 — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTS** (any value type;
+- **Q25 (ruxen ledger) — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTS** (any value type;
   `ruxen check` passes, runtime SIGSEGVs). `Hash.size` is safe. Guard every
   lookup: `if h.size as Int > 0 { … h.key?/get … }`. Repro + boundary in
   `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.
 - **`&Hash[...]` / `&Set[...]` parameter types are unsound** — `Hash`/`Set` are
   mixins without runtime dispatch. A *free fn* errors `E1118`; a *method* with a
   `&Hash` param compiles then SEGFAULTS. Never pass a collection by `&` to a
-  helper — access the field directly (`self.<field>.get`, guarded by Q19).
-- **Q21 — a capturing closure STORED from inside a self-reborrow build block
+  helper — access the field directly (`self.<field>.get`, guarded by Q25).
+- **Q26 (ruxen ledger) — a capturing closure STORED from inside a self-reborrow build block
   corrupts its captures.** `def var container(build) … build.(&var *self)` then
   inside `c.dyn_text({ |ui| count.get(ui) })`: the stored closure's captured
   `count` reads as garbage (wrong Int; SEGFAULT for a captured class handle).
