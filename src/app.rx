@@ -155,10 +155,10 @@ class App
     end
   end
 
-  ## Intrinsic main-axis-aware width of node `i`.
+  ## Intrinsic main-axis-aware width of node `i`. Containers grow by `2*pad`.
   ##   leaf      -> its pre-measured text width
-  ##   Row       -> sum of children widths
-  ##   Col       -> max of children widths
+  ##   Row       -> sum of children widths  + 2*pad
+  ##   Col       -> max of children widths  + 2*pad
   def measure_w(i: Int) -> Int
     if !self.root.container_at(i)
       return self.root.iw_of(i)
@@ -174,16 +174,14 @@ class App
       end
       c = self.root.next_sibling_of(c)
     end
-    if self.root.kind_at(i) == kind_row()
-      return total
-    end
-    maxw
+    let inner = self.axis_extent(i, total, maxw, kind_row())
+    inner + self.root.pad_at(i) * 2
   end
 
-  ## Intrinsic height of node `i`.
+  ## Intrinsic height of node `i`. Containers grow by `2*pad`.
   ##   leaf -> one row
-  ##   Row  -> max of children heights
-  ##   Col  -> sum of children heights
+  ##   Row  -> max of children heights + 2*pad
+  ##   Col  -> sum of children heights + 2*pad
   def measure_h(i: Int) -> Int
     if !self.root.container_at(i)
       return row_height()
@@ -199,10 +197,8 @@ class App
       end
       c = self.root.next_sibling_of(c)
     end
-    if self.root.kind_at(i) == kind_col()
-      return total
-    end
-    maxh
+    let inner = self.axis_extent(i, total, maxh, kind_col())
+    inner + self.root.pad_at(i) * 2
   end
 
   ## Place node `i` (and its subtree) with its top-left at (x, y).
@@ -221,11 +217,13 @@ class App
     end
   end
 
-  ## Lay out the children of container `i` along its axis, anchored at (x, y).
+  ## Lay out the children of container `i` along its axis, anchored at (x, y)
+  ## plus the container's padding (children sit inside `geom - padding`).
   def var place_children(i: Int, x: Int, y: Int) -> nil
     let is_row = self.root.kind_at(i) == kind_row()
-    var cx = x
-    var cy = y
+    let p = self.root.pad_at(i)
+    var cx = x + p
+    var cy = y + p
     var c = self.root.first_child_of(i)
     while c >= 0
       self.place_node(c, cx, cy)
@@ -236,6 +234,15 @@ class App
       end
       c = self.root.next_sibling_of(c)
     end
+  end
+
+  ## Pick the main-axis extent for container `i`: `total` when `i`'s kind is
+  ## `sum_kind` (children stack along that axis), else `maxv` (cross axis).
+  def axis_extent(i: Int, total: Int, maxv: Int, sum_kind: Int) -> Int
+    if self.root.kind_at(i) == sum_kind
+      return total
+    end
+    maxv
   end
 
   def x_of(i: Int) -> Int

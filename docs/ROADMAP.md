@@ -111,7 +111,13 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
 
 - [ ] Lists (scrolling — needs canvas clip/layer, both now available).
 - [ ] Inputs (text field; needs key events + caret).
-- [ ] Styling — padding, background, border (maps onto canvas rrect/gradient/shadow).
+- [x] Styling — **padding, background, border** (v1) on `row`/`col` via a small
+      `Style` value (`row_styled`/`col_styled`): padding insets children and
+      grows the box; background (`fill_round_rect`) + border (`stroke_round_rect`)
+      paint under the children with an optional corner radius. Maps onto canvas's
+      `draw_round_rect`/`stroke_round_rect` in the example binary. Pinned by
+      `tests/style.rx`. (Per-side padding, margins, gradient/shadow fills deferred
+      — additive on the same `Style`.)
 
 ### Blocked on ruxen (the no-GC promise + multi-package framework)
 

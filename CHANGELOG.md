@@ -7,6 +7,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Container styling: padding, background, border.** A small `Style` value
+  (`Style.new.pad(8).background(r,g,b).border(w,r,g,b).radius(n)`, chainable)
+  applied to a container via `Col.row_styled(style, build)` /
+  `col_styled(style, build)`. Layout: padding insets a container's children and
+  grows its box by `2*pad`. Paint: the container records a background
+  `fill_round_rect` then a border `stroke_round_rect` at its full box (each only
+  if set, optional corner radius), under its children so leaves land on top.
+  Two new display-list ops `op_round_rect` / `op_stroke_rect` with `rad_at` /
+  `sw_at` (corner radius + stroke width) on `RecordingSurface`; the example
+  binary's `replay` maps them to canvas `draw_round_rect` / `stroke_round_rect`.
+  Style lives in parallel Int hashes on `Col` (flat-arena discipline; absent ⇒
+  unstyled). Pinned by `tests/style.rx` (5 tests). Suite: **59 passed**; the two
+  `app.rx`/`counter.rx` pins stayed green and untouched.
 - **ADR: layout engine — own simple flex vs Yoga (`docs/LAYOUT.md`).**
   Decided **own simple main-axis stacking/flex pass in safe Ruxen**, shipped
   incrementally (intrinsic stacking now; grow/shrink/wrap later, additively).

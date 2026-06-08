@@ -99,6 +99,41 @@ re-renders when a button child mutates its state"). The targeted-repaint
 invariant holds through containers: a child state change flushes and repaints
 exactly the subscribed child, never its container or siblings.
 
+### Container styling: padding, background, border
+
+A container can carry a `Style` — built with chainable setters and passed to
+`row_styled` / `col_styled` (plain `row`/`col` stay zero-style):
+
+```ruxen
+root.row_styled(
+  Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4),
+  { |c: &var Col| c.text("x") })
+```
+
+| Setter | Meaning |
+|---|---|
+| `pad(n)` | uniform padding (px) on all four sides |
+| `background(r, g, b)` | background fill colour (RGB 0-255) |
+| `border(width, r, g, b)` | border stroke width (px) + colour |
+| `radius(n)` | corner radius (px) for background **and** border |
+
+Each setter returns the `Style` for chaining; unset fields draw nothing
+(`background`/`border` are optional, padding defaults to 0).
+
+- **Layout.** Padding insets the container's children (they lay out inside
+  `box - padding`) and grows the container's own box by `2*pad` on each axis.
+- **Paint.** The container records a background `fill_round_rect` then a border
+  `stroke_round_rect` at its full box (each only if set), *before* its children
+  — which paint later in tree order, so leaves land on top. Two display-list
+  ops (`op_round_rect` / `op_stroke_rect`) carry a corner radius and (for the
+  stroke) a width; the example binary replays them onto canvas's
+  `draw_round_rect` / `stroke_round_rect`.
+
+Style lives in parallel `Int` hashes on `Col` (the same flat-arena discipline
+as the tree links; absent ⇒ unstyled), not a recursive/`Option`-typed field.
+Pinned by `tests/style.rx`. Per-side padding, margins, and gradient/shadow
+fills are deferred — additive on the same `Style`, no API break.
+
 ## Why it must stay pinned with tests
 
 The static-vs-reactive boundary is the single rule users rely on for

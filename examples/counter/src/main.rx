@@ -28,6 +28,16 @@ def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
         surface.x_at(i) as Float32, surface.y_at(i) as Float32,
         surface.w_at(i) as Float32, surface.h_at(i) as Float32)
       let _ = canvas.draw_rect(rect, col)
+    elsif op == op_round_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.draw_round_rect(rect, surface.rad_at(i) as Float32, col)
+    elsif op == op_stroke_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.stroke_round_rect(rect, surface.rad_at(i) as Float32, surface.sw_at(i) as Float32, col)
     else
       let label = surface.text_at(i)
       let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)

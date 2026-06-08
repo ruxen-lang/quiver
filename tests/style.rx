@@ -1,0 +1,90 @@
+# Pins container styling: padding, background, border (docs/DSL.md).
+# Padding insets a container's children and grows its box; the container paints
+# a background round-rect + a border stroke under its children. All headless —
+# asserted against RecordingSurface, no canvas needed.
+Tester.describe("container styling — padding / background / border") do |t: &var Tester|
+  # A styled row: padding 8 on all sides, grey background (200,200,200),
+  # 2px blue (0,0,255) border, corner radius 4, wrapping one text "x".
+  let styled = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      root.row_styled(Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4), { |c: &var Col|
+        c.text("x")                                   # node 1, child
+      })
+    })
+  }
+
+  let w_for = { |chars: Int| chars * char_width() + pad_x() * 2 }
+
+  t.it("padding insets the child and grows the container box") do
+    var app = styled.()
+    # the row is node 0 at the origin; its child is node 1
+    t.expect(app.x_of(0)).to_eq(0)
+    t.expect(app.y_of(0)).to_eq(0)
+    # child is inset by the padding on both axes
+    t.expect(app.x_of(1)).to_eq(8)
+    t.expect(app.y_of(1)).to_eq(8)
+    # the row's box wraps child (w_for(1) wide, one row tall) + 2*pad
+    t.expect(app.w_of(0)).to_eq(w_for.(1) + 16)
+    t.expect(app.h_of(0)).to_eq(row_height() + 16)
+  end
+
+  t.it("an unstyled row has no padding and no style ops") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      root.row({ |c: &var Col| c.text("x") })
+    })
+    # child sits flush at the row origin (zero padding)
+    t.expect(app.x_of(1)).to_eq(0)
+    t.expect(app.y_of(1)).to_eq(0)
+    t.expect(app.w_of(0)).to_eq(w_for.(1))
+    # paint: clear + just the child text (container draws nothing)
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    t.expect(surface.size).to_eq(2)
+    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    t.expect(surface.command_at(1)).to_eq(String.from("text('x',4,16)"))
+  end
+
+  t.it("paint records the background fill, then the border, then the child") do
+    var app = styled.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + bg round-rect + border stroke + child text  = 4 commands
+    t.expect(surface.size).to_eq(4)
+    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    # background fills the full row box (x=0,y=0, w grown, h grown), radius 4
+    t.expect(surface.command_at(1)).to_eq(String.from("round_rect(0,0,#{w_for.(1) + 16},#{row_height() + 16},4,200,200,200)"))
+    # border strokes the same box, 2px, radius 4, blue
+    t.expect(surface.command_at(2)).to_eq(String.from("stroke_rect(0,0,#{w_for.(1) + 16},#{row_height() + 16},4,2,0,0,255)"))
+    # the child text paints ON TOP, inset by the padding (baseline 8 + 16)
+    t.expect(surface.command_at(3)).to_eq(String.from("text('x',12,24)"))
+  end
+
+  t.it("structured ops expose radius + stroke width for replay") do
+    var app = styled.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # cmd 1: background round-rect op
+    t.expect(surface.op_at(1)).to_eq(op_round_rect())
+    t.expect(surface.rad_at(1)).to_eq(4)
+    t.expect(surface.r_at(1)).to_eq(200)
+    # cmd 2: border stroke op
+    t.expect(surface.op_at(2)).to_eq(op_stroke_rect())
+    t.expect(surface.rad_at(2)).to_eq(4)
+    t.expect(surface.sw_at(2)).to_eq(2)
+    t.expect(surface.b_at(2)).to_eq(255)
+  end
+
+  t.it("background only — no border — records just the fill under the child") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      root.col_styled(Style.new.pad(4).background(10, 20, 30), { |c: &var Col|
+        c.text("y")
+      })
+    })
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + bg fill (no border) + child  = 3
+    t.expect(surface.size).to_eq(3)
+    t.expect(surface.op_at(1)).to_eq(op_round_rect())
+    t.expect(surface.op_at(2)).to_eq(op_text())
+  end
+end

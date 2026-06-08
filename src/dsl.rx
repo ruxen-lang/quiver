@@ -35,6 +35,82 @@ def kind_button -> Int { 3 }
 def kind_row -> Int { 4 }
 def kind_col -> Int { 5 }
 
+## Container style: padding, background fill, border, corner radius.
+##
+## A small value object the user constructs with chainable setters and hands to
+## `row_styled` / `col_styled`; `Col` unpacks it into parallel Int hashes (the
+## same flat-arena discipline as the tree links). `-1` sentinels mean "unset":
+## `bg_r < 0` ⇒ no background, `border_w <= 0` ⇒ no border.
+##
+##   Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4)
+class Style
+  ## Uniform padding (px) on all four sides; insets children, grows the box.
+  padding: Int
+  ## Background RGB (each 0-255), or `bg_r = -1` for no background.
+  bg_r: Int
+  bg_g: Int
+  bg_b: Int
+  ## Border stroke width (px); `<= 0` means no border.
+  border_w: Int
+  ## Border RGB (each 0-255).
+  border_r: Int
+  border_g: Int
+  border_b: Int
+  ## Corner radius (px) for background and border; 0 = square corners.
+  corner: Int
+
+  def init
+    self.padding = 0
+    self.bg_r = -1
+    self.bg_g = 0
+    self.bg_b = 0
+    self.border_w = 0
+    self.border_r = 0
+    self.border_g = 0
+    self.border_b = 0
+    self.corner = 0
+  end
+
+  ## Set uniform padding (px). Returns self for chaining.
+  def var pad(n: Int) -> Style
+    self.padding = n
+    self
+  end
+
+  ## Set the background fill colour (RGB 0-255). Returns self for chaining.
+  def var background(r: Int, g: Int, b: Int) -> Style
+    self.bg_r = r
+    self.bg_g = g
+    self.bg_b = b
+    self
+  end
+
+  ## Set the border: stroke width (px) + colour (RGB 0-255). Returns self.
+  def var border(width: Int, r: Int, g: Int, b: Int) -> Style
+    self.border_w = width
+    self.border_r = r
+    self.border_g = g
+    self.border_b = b
+    self
+  end
+
+  ## Set the corner radius (px). Returns self for chaining.
+  def var radius(n: Int) -> Style
+    self.corner = n
+    self
+  end
+
+  ## True when a background fill is set.
+  def has_bg -> Bool
+    self.bg_r >= 0
+  end
+
+  ## True when a border is set.
+  def has_border -> Bool
+    self.border_w > 0
+  end
+end
+
 ## A tree of nodes under construction (the top level stacks vertically).
 class Col
   ## Node kind per node id (kind_text / kind_dyn_text / kind_button / …).
@@ -66,6 +142,19 @@ class Col
   ## `iw_of`, so each leaf's text is measured exactly once per layout.
   iw: Array[Int]
 
+  ## Per-container style, id-indexed, absent ⇒ unstyled. Parallel Int hashes
+  ## (same flat-arena discipline as the tree links): padding insets/grows the
+  ## box; `bg_r` absent/-1 ⇒ no background; `border_w` absent/0 ⇒ no border.
+  pad_of: Hash[Int, Int]
+  bg_r_of: Hash[Int, Int]
+  bg_g_of: Hash[Int, Int]
+  bg_b_of: Hash[Int, Int]
+  border_w_of: Hash[Int, Int]
+  border_r_of: Hash[Int, Int]
+  border_g_of: Hash[Int, Int]
+  border_b_of: Hash[Int, Int]
+  corner_of: Hash[Int, Int]
+
   def init
     self.kinds = Array.new
     self.labels = Array.new
@@ -81,6 +170,15 @@ class Col
     self.root_last = -1
     self.parent_cursor = -1
     self.iw = Array.new
+    self.pad_of = Hash.new
+    self.bg_r_of = Hash.new
+    self.bg_g_of = Hash.new
+    self.bg_b_of = Hash.new
+    self.border_w_of = Hash.new
+    self.border_r_of = Hash.new
+    self.border_g_of = Hash.new
+    self.border_b_of = Hash.new
+    self.corner_of = Hash.new
   end
 
   ## Reset the intrinsic-width buffer (called at the top of each layout pass).
@@ -152,6 +250,20 @@ class Col
     self.container(kind_col(), build)
   end
 
+  ## A horizontal container with a `Style` (padding / background / border).
+  def var row_styled(style: Style, build: any Fn[Fn(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.store_style(id, &style)
+    self.container(kind_row(), build)
+  end
+
+  ## A vertical container with a `Style` (padding / background / border).
+  def var col_styled(style: Style, build: any Fn[Fn(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.store_style(id, &style)
+    self.container(kind_col(), build)
+  end
+
   ## Kind of node `i`, or 0 if out of range.
   def kind_at(i: Int) -> Int
     match self.kinds.get(i)
@@ -219,7 +331,104 @@ class Col
     end
   end
 
+  ## Padding (px) of container `i`, or 0 (unstyled / leaf / out of range).
+  def pad_at(i: Int) -> Int
+    match self.pad_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  ## True when node `i` has a background fill (`bg_r >= 0`).
+  def has_bg_at(i: Int) -> Bool
+    match self.bg_r_of.get(i)
+      Some(v) -> *v >= 0
+      nil     -> false
+    end
+  end
+
+  ## True when node `i` has a border (stroke width > 0).
+  def has_border_at(i: Int) -> Bool
+    match self.border_w_of.get(i)
+      Some(v) -> *v > 0
+      nil     -> false
+    end
+  end
+
+  def bg_r_at(i: Int) -> Int
+    match self.bg_r_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def bg_g_at(i: Int) -> Int
+    match self.bg_g_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def bg_b_at(i: Int) -> Int
+    match self.bg_b_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def border_w_at(i: Int) -> Int
+    match self.border_w_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def border_r_at(i: Int) -> Int
+    match self.border_r_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def border_g_at(i: Int) -> Int
+    match self.border_g_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def border_b_at(i: Int) -> Int
+    match self.border_b_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def corner_at(i: Int) -> Int
+    match self.corner_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
   private
+
+  ## Record `style` against node `id` (only the set fields; padding always).
+  def var store_style(id: Int, style: &Style) -> nil
+    self.pad_of.insert(id, style.padding)
+    self.corner_of.insert(id, style.corner)
+    if style.has_bg
+      self.bg_r_of.insert(id, style.bg_r)
+      self.bg_g_of.insert(id, style.bg_g)
+      self.bg_b_of.insert(id, style.bg_b)
+    end
+    if style.has_border
+      self.border_w_of.insert(id, style.border_w)
+      self.border_r_of.insert(id, style.border_r)
+      self.border_g_of.insert(id, style.border_g)
+      self.border_b_of.insert(id, style.border_b)
+    end
+  end
 
   ## Thread freshly-pushed node `id` into the current parent's child chain
   ## (or the top-level root chain when `parent_cursor` is -1). Sets the
