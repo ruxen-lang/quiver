@@ -77,7 +77,7 @@ it, run the block, then restore the cursor — so nesting is arbitrary. The
 layout pass (`App.arrange`, docs/LAYOUT.md) walks this tree; containers paint
 nothing, their children paint themselves.
 
-### Deviation: reactive children inside a container are deferred (ruxen Q21)
+### Deviation: reactive children inside a container are deferred (ruxen Q26)
 
 The first slice ships **static `text`** inside `row`/`col`. A `dyn_text` or
 `button` built *inside* a container would store a closure that captures state
@@ -86,9 +86,9 @@ through the container's `build.(&var *self)` self-reborrow has its captures
 **corrupted** (wrong value for an `Int`; SIGSEGV for a captured class handle).
 The top-level `App.build` is unaffected (it invokes the builder as
 `f.(&var local.field)`, never a self-reborrow). So reactive *children* are
-held behind ruxen Q21 — `tests/nesting.rx` keeps that assertion as an `xit`
+held behind ruxen Q26 — `tests/nesting.rx` keeps that assertion as an `xit`
 pending, and reactive content lives at the top level until ruxen fixes
-capture under the reborrow. See `CLAUDE.md` landmines (Q21) and
+capture under the reborrow. See `CLAUDE.md` landmines (Q26) and
 `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
 
 ## Why it must stay pinned with tests

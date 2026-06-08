@@ -84,7 +84,7 @@ class App
   ## Current display text of node `i`: reactive cache, else static label.
   ##
   ## The `size > 0` guard is load-bearing: `key?`/`get` on an EMPTY
-  ## `Hash[Int,String]` segfaults in this ruxen build (CLAUDE.md Q19), and a
+  ## `Hash[Int,String]` segfaults in this ruxen build (CLAUDE.md Q25), and a
   ## tree with no `dyn_text` node leaves the cache empty. Only `dyn_text`
   ## nodes are ever cached, so an empty cache means "all static" — fall
   ## straight through to the label.
@@ -147,7 +147,7 @@ class App
   ## `text_of` per node) and stash it on the arena via `Col.push_iw`. The
   ## recursive measure/place then reads it back with `self.root.iw_of`,
   ## re-measuring nothing. Keeping this the *only* place `text_of`/`self.cache`
-  ## is touched during layout also keeps the empty-cache guard (Q19) in one
+  ## is touched during layout also keeps the empty-cache guard (Q25) in one
   ## spot rather than on every recursive width query.
   def var measure_leaves -> nil
     self.root.reset_iw

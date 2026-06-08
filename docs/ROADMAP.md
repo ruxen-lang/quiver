@@ -90,7 +90,7 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       build container nodes; block-built nodes become their children; nesting is
       arbitrary. First slice (`Row` of texts / `Col`s) laid out + painted, pinned
       by `tests/row.rx`. (Reactive children inside a container deferred behind
-      ruxen Q21 — see Known limitations below.)
+      ruxen Q26 — see Known limitations below.)
 
 ### Layout (needs a decision, then implement)
 
@@ -124,13 +124,13 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
 - [ ] **Unit-test quiver's public API directly** — `ruxen test` can't link the
       package, so behavior is pinned through the binary. **→ ruxen Q16.**
 - [ ] **Reactive children inside a container** (`dyn_text`/`button` in a
-      `row`/`col`) — blocked by **ruxen Q21**: a capturing closure stored under
+      `row`/`col`) — blocked by **ruxen Q26**: a capturing closure stored under
       the container's `&var *self` reborrow has its captures corrupted (wrong
       Int / SIGSEGV for a captured class handle). Static `text` children work.
       `tests/nesting.rx` holds the reactive-child assertion as `xit` pending;
       re-enable when ruxen fixes capture under the self-reborrow. Repro in
       `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
-- [ ] **Empty-hash lookups** (**ruxen Q19**) — `Hash.key?`/`get` on an empty hash
+- [ ] **Empty-hash lookups** (**ruxen Q25**) — `Hash.key?`/`get` on an empty hash
       segfault and `&Hash` params are unsound; quiver works around both (direct
       field access guarded by `size > 0`). Repro in
       `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.

@@ -35,11 +35,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Reactive children inside a container** (`dyn_text`/`button` built inside
   `row`/`col`) are deferred: a capturing closure stored under the container's
   `&var *self` reborrow has its captures corrupted in this ruxen build
-  (**Q21** — wrong Int / SIGSEGV for a captured `State` handle). Static `text`
+  (**Q26** — wrong Int / SIGSEGV for a captured `State` handle). Static `text`
   children — the first-slice content — are unaffected. `tests/nesting.rx`
   keeps the reactive-child assertion as an `xit` pending. Repro:
   `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
-- **Empty-hash lookups segfault** (**Q19**): `Hash.key?`/`get` on an empty hash
+- **Empty-hash lookups segfault** (**Q25**): `Hash.key?`/`get` on an empty hash
   SIGSEGVs; `&Hash` parameters are unsound (silent miscompile on methods). All
   quiver hash reads were hardened — direct field access guarded by
   `size as Int > 0`. Repro: `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.

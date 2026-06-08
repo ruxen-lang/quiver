@@ -86,14 +86,14 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
     t.expect(col.first_child_of(1)).to_eq(2)
   end
 
-  # KNOWN ruxen LIMITATION (CLAUDE.md Q21): a closure that CAPTURES a value
+  # KNOWN ruxen LIMITATION (CLAUDE.md Q26): a closure that CAPTURES a value
   # and is stored from inside a container build block (`row`/`col`, which
   # invoke `build.(&var *self)`) has its captures corrupted — invoking the
   # stored compute later reads garbage and segfaults for a captured class
   # handle (e.g. a `State`). Static `text` children are unaffected (no
   # capture), which is the first-slice content. Re-enable when ruxen fixes
   # closure-capture under the self-reborrow.
-  t.xit("a reactive child subscribes through the Ui (blocked: ruxen Q21)") do
+  t.xit("a reactive child subscribes through the Ui (blocked: ruxen Q26)") do
     var ui = Ui.new
     let count = ui.state(7)
     var col = Col.new
