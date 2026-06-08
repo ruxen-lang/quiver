@@ -133,7 +133,9 @@ def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface
         Event.PointerUp(x, y)   -> app.pointer_up(x, y)
         Event.KeyDown(k)        -> app.key_down(map_platform_key(k))
         Event.Resize(ww, hh)    -> nil
+        Event.Scroll(dx, dy)    -> nil
         Event.CloseRequested    -> running = false
+        _                       -> nil
       end
       nil -> nil
     end
