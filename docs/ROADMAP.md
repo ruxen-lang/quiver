@@ -118,7 +118,14 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       (clamped) + drag-to-scroll (no wheel `Event`). Pinned by `tests/list.rx`.
       (Horizontal scroll, virtualization, scrollbars, offset-aware hit-test for
       interactive list children deferred.)
-- [ ] Inputs (text field; needs key events + caret).
+- [x] Inputs (single-line text field) — `Col.input(value, width)`: a focusable
+      field bound to a reactive `State[String]`. `App` tracks `focused` +
+      per-input `caret`; `pointer_down` focuses, `key_down`/`type_char`/`key`
+      route to the focused input (insert / backspace / left / right). Paint: box
+      + text + caret rect. `Event.KeyDown` carries an opaque platform keycode, so
+      quiver uses logical key codes the shell maps SDL onto. Pinned by
+      `tests/input.rx`. (Selection, clipboard, multiline, real text metrics for
+      the caret deferred.)
 - [x] Styling — **padding, background, border** (v1) on `row`/`col` via a small
       `Style` value (`row_styled`/`col_styled`): padding insets children and
       grows the box; background (`fill_round_rect`) + border (`stroke_round_rect`)

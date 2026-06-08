@@ -38,6 +38,10 @@ def kind_col -> Int { 5 }
 ## clips its children and scrolls them by an offset when the content overflows
 ## (see docs/DSL.md). Its box is the viewport, not the content extent.
 def kind_list -> Int { 6 }
+## A single-line text `Input`: a focusable leaf whose value is a reactive
+## `State[String]`. It re-renders like a `dyn_text` (its compute reads the
+## value) and is edited via `App.key_down` at a caret (see docs/DSL.md).
+def kind_input -> Int { 7 }
 
 ## Container style: padding, background fill, border, corner radius.
 ##
@@ -161,6 +165,14 @@ class Col
   ## Per-list fixed viewport height (px), id-indexed; absent ⇒ not a list.
   viewport_of: Hash[Int, Int]
 
+  ## Input value pool: each input's reactive `State[String]` (so `App.key_down`
+  ## can mutate it), with `value_of` mapping node id -> pool index, and
+  ## `input_width_of` the input's fixed box width. Same index-pool pattern as
+  ## `computes`/`compute_of`.
+  values: Array[State[String]]
+  value_of: Hash[Int, Int]
+  input_width_of: Hash[Int, Int]
+
   def init
     self.kinds = Array.new
     self.labels = Array.new
@@ -186,6 +198,9 @@ class Col
     self.border_b_of = Hash.new
     self.corner_of = Hash.new
     self.viewport_of = Hash.new
+    self.values = Array.new
+    self.value_of = Hash.new
+    self.input_width_of = Hash.new
   end
 
   ## Reset the intrinsic-width buffer (called at the top of each layout pass).
@@ -245,6 +260,27 @@ class Col
     self.link(id)
   end
 
+  ## A single-line text input bound to a reactive `State[String]` value, with a
+  ## fixed box width. The node is a tracking scope (its compute reads `value`),
+  ## so it re-renders when the value changes; `App` drives focus + caret + key
+  ## editing and mutates `value`. Build it at the top level so the captured
+  ## value handle is sound:
+  ##
+  ##   let name = ui.state_str("")
+  ##   root.input(name, 160)
+  def var input(value: State[String], width: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_input())
+    self.labels.push(String.from(""))
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| value.get(ui2) })
+    self.handler_of.push(-1)
+    self.value_of.insert(id, self.values.size as Int)
+    self.values.push(value)
+    self.input_width_of.insert(id, width)
+    self.link(id)
+  end
+
   ## A horizontal container: the nodes built inside `build` become its
   ## children and are stacked along the X axis by the layout pass.
   def var row(build: any Fn[Fn(&var Col) -> nil]) -> nil
@@ -297,6 +333,27 @@ class Col
   ## True when node `i` is a scrolling list.
   def list_at(i: Int) -> Bool
     self.kind_at(i) == kind_list()
+  end
+
+  ## True when node `i` is a text input (focusable / editable).
+  def input_at(i: Int) -> Bool
+    self.kind_at(i) == kind_input()
+  end
+
+  ## Fixed box width of input `i`, or 0 (not an input / out of range).
+  def input_width_at(i: Int) -> Int
+    match self.input_width_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  ## Index into the `values` pool for input `i`, or -1.
+  def value_index_at(i: Int) -> Int
+    match self.value_of.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
   end
 
   ## Fixed viewport height of list `i`, or 0 (not a list / out of range).

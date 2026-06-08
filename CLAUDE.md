@@ -39,6 +39,14 @@ ruxen fmt <file>                  # canonical formatting
 - No canvas symbols in `src/` or `tests/` (ruxen v1 library/test builds don't
   merge dependency sources; only binaries do).
 - One `Mutex` lock per function frame — guards release at function exit only.
+  **This spans a `State.peek` + `State.set` PAIR on the same handle:** a `peek`
+  taken anywhere in a frame is still held when a later `set` runs in that same
+  frame (even if each is in its own sub-method, because the guard releases at
+  the *calling* frame's exit), and the two locks collide → the value silently
+  corrupts/empties (verified 2026-06-08 building the text input). Read-modify
+  -write must go through ONE `State.update(ui, { |cur| … })` call, not a
+  peek-then-set; that locks exactly once. A lone `peek` (no `set` in the frame)
+  is fine.
 
 ## Ruxen v1 landmines (all verified; violating them = crash or miscompile)
 

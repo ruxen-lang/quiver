@@ -14,6 +14,17 @@ def char_width -> Int { 8 }
 def pad_x -> Int { 4 }
 def baseline_drop -> Int { 16 }
 
+## Logical key codes for `App.key_down`. Printable input is the character's
+## ASCII code (32-126, which is also the SDL keycode for those keys), so a key
+## in that range inserts that char. The named edit keys are quiver's OWN logical
+## codes — a windowed shell maps the platform keycode (canvas `Event.KeyDown`
+## carries an opaque keycode, no char/modifiers) onto these. `key_backspace` is
+## ASCII/SDL BS (8); the arrows use negative codes so they never collide with a
+## printable char or a real positive platform keycode.
+def key_backspace -> Int { 8 }
+def key_left -> Int { -1 }
+def key_right -> Int { -2 }
+
 class App
   ui: Ui
   root: Col
@@ -32,6 +43,11 @@ class App
   ## height (sum of child heights), used to clamp the offset.
   scroll: Hash[Int, Int]
   content_h: Hash[Int, Int]
+  ## The focused input's node id (-1 when nothing is focused). Only the focused
+  ## input consumes key input.
+  focused: Int
+  ## Per-input caret index (chars before the caret), node-id-keyed.
+  caret: Hash[Int, Int]
 
   def init
     self.ui = Ui.new
@@ -44,6 +60,8 @@ class App
     self.span_w = 0
     self.scroll = Hash.new
     self.content_h = Hash.new
+    self.focused = -1
+    self.caret = Hash.new
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -155,6 +173,8 @@ class App
     while i < n
       if self.root.container_at(i)
         self.root.push_iw(0)
+      elsif self.root.input_at(i)
+        self.root.push_iw(self.root.input_width_at(i))
       else
         self.root.push_iw(self.leaf_w(i))
       end
@@ -335,12 +355,13 @@ class App
     self.scroll_to(i, self.scroll_of(i) + dy)
   end
 
-  ## Topmost interactive node containing (x, y), or -1.
+  ## Topmost interactive node (a button handler OR a focusable input)
+  ## containing (x, y), or -1.
   def hit_test(x: Int, y: Int) -> Int
     var i = 0
     let n = self.root.size
     while i < n
-      if self.root.handler_at(i) >= 0
+      if self.root.handler_at(i) >= 0 || self.root.input_at(i)
         if self.contains(i, x, y)
           return i
         end
@@ -350,14 +371,64 @@ class App
     -1
   end
 
-  ## A pointer-down event from the engine: hit-test, run the handler.
-  ## Returns the node id that handled it, or -1.
+  ## A pointer-down event from the engine: hit-test; focus an input or run a
+  ## button handler. Returns the node id that handled it, or -1.
   def var pointer_down(x: Int, y: Int) -> Int
     let i = self.hit_test(x, y)
     if i >= 0
-      self.click(i)
+      if self.root.input_at(i)
+        self.focused = i
+      else
+        self.click(i)
+      end
     end
     i
+  end
+
+  ## The focused input's node id, or -1 when nothing is focused.
+  def focused_node -> Int
+    self.focused
+  end
+
+  ## Caret index (chars before the caret) of input `i`, or 0.
+  def caret_of(i: Int) -> Int
+    match self.caret.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  ## A key-down event: route to the focused input. Printable ASCII (32-126)
+  ## inserts that char at the caret; `key_backspace` deletes the char before
+  ## the caret; `key_left`/`key_right` move the caret. No-op when nothing is
+  ## focused. After an edit / caret move the input is dirtied for repaint.
+  def var key_down(code: Int) -> nil
+    let i = self.focused
+    if i < 0
+      return
+    end
+    if !self.root.input_at(i)
+      return
+    end
+    if code >= 32 && code <= 126
+      self.insert_char(i, code)
+    elsif code == key_backspace()
+      self.backspace(i)
+    elsif code == key_left()
+      self.move_caret(i, -1)
+    elsif code == key_right()
+      self.move_caret(i, 1)
+    end
+  end
+
+  ## Programmatic insert of one printable char (by code) into the focused input.
+  def var type_char(code: Int) -> nil
+    self.key_down(code)
+  end
+
+  ## Programmatic key (alias of `key_down`) — the headless edit entry point.
+  def var key(code: Int) -> nil
+    self.key_down(code)
   end
 
   private
@@ -388,5 +459,91 @@ class App
     let gx = self.x_of(i)
     let gy = self.y_of(i)
     x >= gx && x < gx + self.w_of(i) && y >= gy && y < gy + self.h_of(i)
+  end
+
+  ## Current value string of input `i` — read LIVE from its reactive `State`
+  ## (a single `peek`, one lock per frame). Used to clamp a caret move.
+  def input_value(i: Int) -> String
+    let idx = self.root.value_index_at(i)
+    if idx < 0
+      return String.from("")
+    end
+    match self.root.values.get(idx)
+      Some(s) -> s.peek
+      nil     -> String.from("")
+    end
+  end
+
+  ## Edit input `i`'s value through a SINGLE `State.update` (read-modify-write
+  ## under one Mutex lock). A separate `peek`+`set` pair would hold two locks on
+  ## the same Mutex across this frame — the "one lock per frame" landmine, which
+  ## corrupts the value — so the new string is built inside the update closure.
+  def var edit_value(i: Int, f: any Fn[Fn(String) -> String]) -> nil
+    let idx = self.root.value_index_at(i)
+    if idx < 0
+      return
+    end
+    match self.root.values.get(idx)
+      Some(s) -> s.update(&var self.ui, f)
+      nil     -> nil
+    end
+  end
+
+  ## Insert the printable char `code` at input `i`'s caret, advancing it.
+  def var insert_char(i: Int, code: Int) -> nil
+    let caret = self.caret_of(i)
+    self.edit_value(i, { |cur: String|
+      var out = String.from("")
+      var n = 0
+      for c in cur.chars
+        if n == caret
+          let ch = code as Char
+          out = "#{out}#{ch}"
+        end
+        out = "#{out}#{c}"
+        n = n + 1
+      end
+      if caret >= n
+        let ch = code as Char
+        out = "#{out}#{ch}"
+      end
+      out
+    })
+    self.caret.insert(i, caret + 1)
+  end
+
+  ## Delete the char before input `i`'s caret, retreating it (no-op at start).
+  def var backspace(i: Int) -> nil
+    let caret = self.caret_of(i)
+    if caret <= 0
+      return
+    end
+    self.edit_value(i, { |cur: String|
+      var out = String.from("")
+      var n = 0
+      for c in cur.chars
+        if n != caret - 1
+          out = "#{out}#{c}"
+        end
+        n = n + 1
+      end
+      out
+    })
+    self.caret.insert(i, caret - 1)
+  end
+
+  ## Move input `i`'s caret by `delta` (clamped to [0, length]); dirties the
+  ## node so the caret repaints even though the value did not change.
+  def var move_caret(i: Int, delta: Int) -> nil
+    let len = self.input_value(i).size as Int
+    var next = self.caret_of(i) + delta
+    if next < 0
+      next = 0
+    end
+    if next > len
+      next = len
+    end
+    self.caret.insert(i, next)
+    self.ui.mark_dirty(i)
   end
 end

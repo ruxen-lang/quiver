@@ -180,6 +180,57 @@ discipline; absent ⇒ not a list), keyed by `kind_list`. Pinned by
 `tests/list.rx`. Horizontal scroll, virtualization, scrollbars, and an
 offset-aware hit-test for interactive list children are deferred (additive).
 
+### Single-line text `Input`
+
+`input` is a focusable, editable field bound to a reactive `State[String]`:
+
+```ruxen
+let name = ui.state_str("")
+root.text("name:")
+root.input(name, 160)             # 160px-wide field
+```
+
+The input node is a tracking scope (its compute reads `name`), so it
+re-renders like a `dyn_text` when the value changes — reusing the reactive-child
+machinery. The `State[String]` is the source of truth; the user holds it and can
+read it.
+
+- **Focus.** `App` tracks `focused` (the focused input's node id, `-1` = none).
+  `app.pointer_down(x, y)` over an input sets focus to it (and `hit_test` now
+  matches inputs as well as button handlers). `app.focused_node` reads it. Only
+  the focused input consumes key input.
+- **Key handling.** `app.key_down(code)` (alias `type_char(code)` / `key(code)`,
+  the headless edit entry points) routes to the focused input:
+
+  | `code` | Effect |
+  |---|---|
+  | `32`–`126` (printable ASCII) | insert that char at the caret, caret++ |
+  | `key_backspace` (`8`) | delete the char before the caret, caret-- |
+  | `key_left` / `key_right` | move the caret (clamped to `[0, len]`) |
+
+  Editing mutates the value `State` → `flush` → repaints just the input;
+  `app.caret_of(input_id)` reads the caret index.
+- **What `KeyDown` carries.** `canvas`'s `Event.KeyDown(Int)` is an **opaque
+  platform keycode** — no char, no modifiers. By SDL convention printable ASCII
+  keys equal their ASCII code (so quiver treats `32`–`126` as the char), but
+  arrow/edit keys are platform-specific, so quiver defines its OWN logical codes
+  (`key_backspace`/`key_left`/`key_right`) and a windowed shell maps the SDL
+  keycode onto them (the example binary's `map_platform_key`). quiver stays
+  platform-agnostic.
+- **Caret + paint.** `App` keeps a per-input `caret` index. Paint draws a field
+  box (`fill_round_rect`), the text, and — only when focused — a thin caret
+  `fill_rect` at `x + pad_x + caret * char_width` (the char-metric estimate
+  layout already uses; real Skia advance widths later).
+- **Layout.** Fixed `width` (stored in a per-node `Int` hash on `Col`), one line
+  tall (`row_height`).
+
+The value `State[String]` is held in a per-`Col` value pool
+(`Array[State[String]]` + a node-id→index hash), the same index-pool pattern as
+`computes`. **Edits go through a single `State.update(ui, { |cur| … })`** — a
+`peek`-then-`set` pair on one handle would hold two Mutex locks across the frame
+and corrupt the value (the "one lock per frame" landmine; see CLAUDE.md).
+Pinned by `tests/input.rx`. Selection, clipboard, and multiline are deferred.
+
 ## Why it must stay pinned with tests
 
 The static-vs-reactive boundary is the single rule users rely on for

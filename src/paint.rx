@@ -256,6 +256,10 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
     paint_container_style(app, surface, i)
     return
   end
+  if app.root.input_at(i)
+    paint_input(app, surface, i)
+    return
+  end
   let x = app.x_of(i)
   let y = app.y_of(i)
   if app.root.kind_at(i) == kind_button()
@@ -263,6 +267,21 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   end
   let label = app.text_of(i)
   surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
+end
+
+## Paint a text input: a light field box, its text, and — only when focused — a
+## thin caret rect after the `caret`-th character. Caret x uses the char-metric
+## estimate (the same one layout uses; real Skia advance widths come later).
+def paint_input[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  let x = app.x_of(i)
+  let y = app.y_of(i)
+  surface.fill_round_rect(x, y, app.w_of(i), app.h_of(i), 0, 245, 245, 245)
+  let label = app.text_of(i)
+  surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
+  if app.focused_node == i
+    let cx = x + pad_x() + app.caret_of(i) * char_width()
+    surface.fill_rect(cx, y + 4, 1, app.h_of(i) - 8, 20, 20, 20)
+  end
 end
 
 ## Paint a container's background fill and border (each only if set), at its

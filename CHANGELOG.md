@@ -7,6 +7,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Single-line text `Input`.** `Col.input(value, width)` builds a focusable
+  field bound to a reactive `State[String]` (`let name = ui.state_str("")`;
+  `root.input(name, 160)`). The node is a tracking scope (its compute reads the
+  value) so it re-renders like a `dyn_text`. `App` owns the runtime state:
+  `focused` (the focused input's node id; `pointer_down` on an input focuses it,
+  only the focused input consumes keys) and a per-input `caret` index.
+  `App.key_down(code)` / `type_char(code)` / `key(code)` route to the focused
+  input — printable ASCII (32-126) inserts at the caret, `key_backspace` deletes
+  before it, `key_left`/`key_right` move it (clamped); edits mutate the value →
+  `flush` → repaint just the input. `canvas`'s `Event.KeyDown(Int)` carries an
+  opaque platform keycode (no char/modifiers), so quiver defines logical key
+  codes and the example binary maps SDL keycodes onto them. Paint: a field box +
+  the text + a thin caret rect (only when focused) at the char-metric caret x.
+  Pinned by `tests/input.rx` (9 tests). Suite: **74 passed**; the two
+  `app.rx`/`counter.rx` pins stayed green and untouched.
 - **Vertically-scrolling `List`.** `Col.list(viewport_h, build)` builds a
   `Col`-like container with a FIXED viewport height that clips its children and
   scrolls them by an offset. Layout: the list's box is its viewport (it does

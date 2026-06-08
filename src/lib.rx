@@ -79,6 +79,13 @@ class Ui
     end
   end
 
+  ## Mark one tracking scope dirty directly (no state change). Used when a node
+  ## must repaint for a reason other than a state read — e.g. a text input
+  ## whose caret moved without editing the value.
+  def var mark_dirty(scope: Int) -> nil
+    self.dirty.insert(scope)
+  end
+
   ## Drop every subscription held by `scope`. Called before a tracking
   ## scope re-runs so its subscriptions always reflect its LAST run —
   ## a closure that conditionally reads different states must not stay
