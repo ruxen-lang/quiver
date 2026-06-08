@@ -115,9 +115,12 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       children in `save`/`clip`/`translate(-offset)`/`restore`
       (`op_save`/`op_clip`/`op_translate`/`op_restore` → canvas
       `save`/`clip_rect`/`translate`/`restore`). Scroll via `scroll_to`/`scroll_by`
-      (clamped) + drag-to-scroll (no wheel `Event`). Pinned by `tests/list.rx`.
-      (Horizontal scroll, virtualization, scrollbars, offset-aware hit-test for
-      interactive list children deferred.)
+      (clamped) + drag-to-scroll (no wheel `Event`). **Hit-testing is
+      scroll/clip-aware** — `hit_test` mirrors the paint walk, accumulating the
+      scroll offset and intersecting each list's viewport as a clip, so clicks on
+      scrolled buttons/inputs land right and clipped-away items are unhittable
+      (nested lists accumulate). Pinned by `tests/list.rx` + `tests/list_interaction.rx`.
+      (Horizontal scroll, virtualization, scrollbars deferred.)
 - [x] Inputs (single-line text field) — `Col.input(value, width)`: a focusable
       field bound to a reactive `State[String]`. `App` tracks `focused` +
       per-input `caret`; `pointer_down` focuses, `key_down`/`type_char`/`key`

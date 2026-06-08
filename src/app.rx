@@ -355,18 +355,54 @@ class App
     self.scroll_to(i, self.scroll_of(i) + dy)
   end
 
-  ## Topmost interactive node (a button handler OR a focusable input)
-  ## containing (x, y), or -1.
+  ## Topmost interactive node (a button handler OR a focusable input) under the
+  ## SCREEN point (x, y), or -1. Mirrors the paint walk's transforms: descending
+  ## into a `List` adds its scroll offset to the accumulated content offset and
+  ## requires the point to be inside the list's viewport box (the clip), so a
+  ## click maps to the on-screen child and clicks outside a viewport hit none of
+  ## its children. Nested lists accumulate (sum offsets, intersect clips).
   def hit_test(x: Int, y: Int) -> Int
-    var i = 0
-    let n = self.root.size
-    while i < n
-      if self.root.handler_at(i) >= 0 || self.root.input_at(i)
-        if self.contains(i, x, y)
-          return i
-        end
+    var node = self.root.root_head
+    while node >= 0
+      let h = self.hit_tree(node, x, y, 0, 0)
+      if h >= 0
+        return h
       end
-      i = i + 1
+      node = self.root.next_sibling_of(node)
+    end
+    -1
+  end
+
+  ## Recursive hit-test for the subtree rooted at `i`. `(ox, oy)` is the
+  ## accumulated content offset: a screen point maps to THIS level's content
+  ## space as `(x + ox, y + oy)`. Returns the first interactive hit, or -1.
+  def hit_tree(i: Int, x: Int, y: Int, ox: Int, oy: Int) -> Int
+    let px = x + ox
+    let py = y + oy
+    if self.root.handler_at(i) >= 0 || self.root.input_at(i)
+      if self.contains(i, px, py)
+        return i
+      end
+    end
+    if !self.root.container_at(i)
+      return -1
+    end
+    var coy = oy
+    if self.root.list_at(i)
+      # clip: the point (in this list's parent space) must be inside its box,
+      # else none of its children are reachable.
+      if !self.contains(i, px, py)
+        return -1
+      end
+      coy = oy + self.scroll_of(i)
+    end
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      let h = self.hit_tree(c, x, y, ox, coy)
+      if h >= 0
+        return h
+      end
+      c = self.root.next_sibling_of(c)
     end
     -1
   end

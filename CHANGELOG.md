@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Hit-testing through a scrolled `List`.** `hit_test`/`pointer_down` now apply
+  the same transforms the paint walk applies — a recursive walk mirroring
+  `paint_tree` that carries an accumulated scroll offset and enforces each
+  list's viewport box as a clip. Entering a list subtree adds its scroll offset
+  to the accumulated content offset (a screen point maps to content space by
+  adding the offset back) and requires the point to be inside the viewport box,
+  so: a click fires the on-SCREEN child (not the unscrolled one), a click
+  outside the viewport (or on an item scrolled out) fires nothing, and nested
+  lists accumulate (sum offsets, intersect clips). Previously a scrolled list of
+  buttons/inputs hit the wrong child or a clipped-away one. The non-scrolled
+  path is unchanged (the `app.rx`/`counter.rx` pins and existing nesting/row/
+  style/list tests stay green). Pinned by `tests/list_interaction.rx` (7 tests).
+  Suite: **81 passed**.
+
 ### Added
 - **Single-line text `Input`.** `Col.input(value, width)` builds a focusable
   field bound to a reactive `State[String]` (`let name = ui.state_str("")`;

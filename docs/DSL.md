@@ -174,11 +174,20 @@ root.list(96, { |c: &var Col|     # 96px viewport
   drives scrolling by **drag** (pointer down then move adjusts the offset via
   `scroll_by`); the programmatic `scroll_to`/`scroll_by` are the headless-testable
   surface and what the drag handler calls.
+- **Hit-testing is scroll/clip-aware.** `hit_test`/`pointer_down` mirror the
+  paint walk: a recursive descent carrying an accumulated content offset.
+  Entering a list adds its scroll offset (a screen point maps to that level's
+  content space as `(x + ox, y + oy)`) and requires the point to be inside the
+  list's viewport box (the clip) before any child is reachable. So a click fires
+  the on-SCREEN child — not the unscrolled one — and a click outside the
+  viewport (or on an item scrolled out of view) hits nothing. Nested lists
+  accumulate: offsets sum, viewports intersect. Pinned by
+  `tests/list_interaction.rx`.
 
 Viewport height is stored in a per-node `Int` hash on `Col` (flat-arena
 discipline; absent ⇒ not a list), keyed by `kind_list`. Pinned by
-`tests/list.rx`. Horizontal scroll, virtualization, scrollbars, and an
-offset-aware hit-test for interactive list children are deferred (additive).
+`tests/list.rx`. Horizontal scroll, virtualization, and scrollbars are deferred
+(additive).
 
 ### Single-line text `Input`
 
