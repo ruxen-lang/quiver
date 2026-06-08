@@ -46,6 +46,10 @@ def kind_input -> Int { 7 }
 ## reads the bool (so it re-renders on toggle) and its handler toggles it; paint
 ## draws a box + a filled mark when checked + the label (see docs/DSL.md).
 def kind_checkbox -> Int { 8 }
+## A horizontal `Slider`: a draggable leaf bound to a reactive `State[Int]` over
+## `[min, max]`. Its compute reads the value (so the thumb re-renders); `App`
+## drives click-to-set and drag (via pointer capture). See docs/DSL.md.
+def kind_slider -> Int { 9 }
 
 ## Container style: padding, background fill, border, corner radius.
 ##
@@ -180,6 +184,14 @@ class Col
   ## mapping node id -> pool index. `App` peeks it for paint (checked state).
   bools: Array[State[Bool]]
   bool_of: Hash[Int, Int]
+  ## Slider value pool: each slider's reactive `State[Int]`, with `int_of`
+  ## mapping node id -> pool index, plus per-slider `min`/`max`/`width`. `App`
+  ## reads/writes the value (click-to-set + drag) with a single-lock `set`.
+  ints: Array[State[Int]]
+  int_of: Hash[Int, Int]
+  slider_min_of: Hash[Int, Int]
+  slider_max_of: Hash[Int, Int]
+  slider_width_of: Hash[Int, Int]
 
   def init
     self.kinds = Array.new
@@ -211,6 +223,11 @@ class Col
     self.input_width_of = Hash.new
     self.bools = Array.new
     self.bool_of = Hash.new
+    self.ints = Array.new
+    self.int_of = Hash.new
+    self.slider_min_of = Hash.new
+    self.slider_max_of = Hash.new
+    self.slider_width_of = Hash.new
   end
 
   ## Reset the intrinsic-width buffer (called at the top of each layout pass).
@@ -317,6 +334,28 @@ class Col
     self.link(id)
   end
 
+  ## A horizontal slider bound to a reactive `State[Int]` over `[min, max]`, with
+  ## a fixed track width. The node is a tracking scope (its compute reads the
+  ## value, so the thumb re-renders); `App` drives click-to-set + drag (capture)
+  ## and writes the value. Build it where the captured handle is sound:
+  ##
+  ##   let vol = ui.state(50)
+  ##   root.slider(vol, 0, 100, 200)
+  def var slider(state: State[Int], min: Int, max: Int, width: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_slider())
+    self.labels.push(String.from(""))
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| "#{state.get(ui2)}" })
+    self.handler_of.push(-1)
+    self.int_of.insert(id, self.ints.size as Int)
+    self.ints.push(state)
+    self.slider_min_of.insert(id, min)
+    self.slider_max_of.insert(id, max)
+    self.slider_width_of.insert(id, width)
+    self.link(id)
+  end
+
   ## A horizontal container: the nodes built inside `build` become its
   ## children and are stacked along the X axis by the layout pass.
   def var row(build: any Fn[Fn(&var Col) -> nil]) -> nil
@@ -402,6 +441,40 @@ class Col
     match self.bool_of.get(i)
       Some(v) -> *v
       nil     -> -1
+    end
+  end
+
+  ## True when node `i` is a slider.
+  def slider_at(i: Int) -> Bool
+    self.kind_at(i) == kind_slider()
+  end
+
+  ## Index into the `ints` pool for slider `i`, or -1.
+  def int_index_at(i: Int) -> Int
+    match self.int_of.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  def slider_min_at(i: Int) -> Int
+    match self.slider_min_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def slider_max_at(i: Int) -> Int
+    match self.slider_max_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def slider_width_at(i: Int) -> Int
+    match self.slider_width_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
     end
   end
 

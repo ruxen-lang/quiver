@@ -146,8 +146,8 @@ def drive(win0: Window) -> nil
       Some(ev) -> match ev
         Event.PointerDown(x, y) -> app.pointer_down(x, y)
         Event.CloseRequested    -> running = false
-        Event.PointerMove(x, y) -> nil
-        Event.PointerUp(x, y)   -> nil
+        Event.PointerMove(x, y) -> app.pointer_move(x, y)
+        Event.PointerUp(x, y)   -> app.pointer_up(x, y)
         Event.KeyDown(k)        -> app.key_down(map_platform_key(k))
         Event.Resize(ww, hh)    -> nil
       end

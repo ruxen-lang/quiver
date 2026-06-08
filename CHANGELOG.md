@@ -7,6 +7,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Drag-capture event infra.** `App` gained `pointer_move(x, y)` /
+  `pointer_up(x, y)` dispatch and a `captured` node id (like `focused` for
+  inputs). `pointer_down` on a draggable widget sets capture; subsequent
+  `pointer_move`s drive THAT node regardless of pointer position; `pointer_up`
+  clears it. `captured_node` reads it. Reusable by any future drag widget. The
+  example binary's event loop now forwards real `PointerMove`/`PointerUp`.
+- **Horizontal `Slider` widget.** `Col.slider(state, min, max, width)` binds to
+  a reactive `State[Int]` clamped to `[min, max]` (`let vol = ui.state(50)`;
+  `root.slider(vol, 0, 100, 200)`). The node is a tracking scope (its compute
+  reads the value, so the thumb re-renders on change). A click on the track
+  jumps the value to the click fraction; dragging the thumb updates continuously
+  via the capture above. Screen x → value:
+  `v = min + round((x - track_left) / track_w * (max - min))`, clamped — computed
+  from geometry only (no state read), so the write is a **single-lock `set`** (no
+  peek+set). Programmatic `drag_to(id, x)` / `set_value(id, v)` / `slider_value(id)`
+  for headless use. Paint: a track (`fill_round_rect`), a filled portion to the
+  thumb, and the thumb centered at the value's x — no new display-list op. Hit-
+  tests correctly inside scrolled lists (routes through the offset/clip-aware
+  `hit_tree`; X-axis value math is unaffected by vertical scroll). Pinned by
+  `tests/slider.rx` (11 tests). Suite: **99 passed**; the two `app.rx`/`counter.rx`
+  pins stayed green and untouched.
 - **`Checkbox` widget.** `Col.checkbox(state, label)` binds to a reactive
   `State[Bool]` (`let agree = ui.state_bool(false)`; `root.checkbox(agree,
   "I agree")`). The node is both a tracking scope (its compute reads the bool,

@@ -264,6 +264,10 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
     paint_checkbox(app, surface, i)
     return
   end
+  if app.root.slider_at(i)
+    paint_slider(app, surface, i)
+    return
+  end
   let x = app.x_of(i)
   let y = app.y_of(i)
   if app.root.kind_at(i) == kind_button()
@@ -271,6 +275,25 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   end
   let label = app.text_of(i)
   surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
+end
+
+## Paint a horizontal slider: a track bar, a filled portion from the track's
+## left to the thumb, and the thumb (a rounded square) centered at the value's
+## x. The thumb is the LAST command (the test pins it).
+def paint_slider[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  let x = app.x_of(i)
+  let y = app.y_of(i)
+  let w = app.w_of(i)
+  let track_y = y + (row_height() - slider_track_h()) / 2
+  let radius = slider_track_h() / 2
+  surface.fill_round_rect(x, track_y, w, slider_track_h(), radius, 200, 200, 200)
+  let cx = app.slider_thumb_center_x(i)
+  let fill_w = cx - x
+  if fill_w > 0
+    surface.fill_round_rect(x, track_y, fill_w, slider_track_h(), radius, 100, 100, 200)
+  end
+  let ty = y + (row_height() - slider_thumb()) / 2
+  surface.fill_round_rect(cx - slider_thumb() / 2, ty, slider_thumb(), slider_thumb(), slider_thumb() / 2, 60, 60, 160)
 end
 
 ## Paint a checkbox: a bordered square box, a filled inner mark WHEN checked,

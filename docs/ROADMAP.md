@@ -136,6 +136,13 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       hit-tests through list scroll. New `Ui.state_bool`. Pinned by
       `tests/checkbox.rx`. (A toggle/switch variant would be the same node with a
       pill-shaped paint — additive.)
+- [x] Slider (horizontal) — `Col.slider(state, min, max, width)` bound to a
+      reactive `State[Int]`. Click-to-set + drag-to-update via new **drag-capture
+      infra** on `App` (`pointer_move`/`pointer_up`/`captured`, reusable). Screen
+      x → value math (single-lock `set`, no peek+set); thumb re-renders on change;
+      hit-tests through list scroll. Paint reuses `op_round_rect` (track + filled
+      portion + thumb). Pinned by `tests/slider.rx`. (Vertical/range/float sliders
+      deferred — additive.)
 - [x] Styling — **padding, background, border** (v1) on `row`/`col` via a small
       `Style` value (`row_styled`/`col_styled`): padding insets children and
       grows the box; background (`fill_round_rect`) + border (`stroke_round_rect`)

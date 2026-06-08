@@ -275,6 +275,63 @@ node-id→index hash), the same index-pool pattern as inputs. `Ui.state_bool`
 mints the handle. Pinned by `tests/checkbox.rx`. A toggle/switch is the same
 node with a pill-shaped paint — deferred (additive).
 
+### Pointer dispatch + drag capture
+
+`App` dispatches three pointer events, all returning the hit/captured node id
+(or `-1`), plus key dispatch:
+
+| Call | Effect |
+|---|---|
+| `pointer_down(x, y)` | hit-test; focus an input, **capture** + set a slider, or run a button/checkbox handler |
+| `pointer_move(x, y)` | if a node is **captured**, drive it from `x` regardless of where the pointer is; else no-op |
+| `pointer_up(x, y)` | release the capture |
+
+`App` tracks a `captured` node id (like `focused` for inputs); `captured_node`
+reads it. Capture is the reusable drag primitive: a widget that needs
+press-drag-release (today the slider) captures on `pointer_down`, is driven by
+every `pointer_move` until `pointer_up`. The windowed shell forwards real
+`PointerMove`/`PointerUp` into these, the same way it forwards scroll/keys.
+
+### `Slider`
+
+`slider` is a draggable horizontal control bound to a reactive `State[Int]`
+clamped to `[min, max]`:
+
+```ruxen
+let vol = ui.state(50)
+root.slider(vol, 0, 100, 200)     # min 0, max 100, 200px wide
+```
+
+The node is a tracking scope (its compute reads the value), so the thumb
+re-renders on change. Interaction:
+- a **click on the track** jumps the value to the click fraction;
+- **dragging** the thumb updates continuously via the capture above — a
+  `pointer_move` anywhere (even off the slider) drives the captured slider.
+
+Screen x → value: `track_left = x + thumb/2`, `track_w = width - thumb`, and
+`v = min + round((px - track_left) / track_w * (max - min))`, clamped to
+`[min, max]`. The value is computed from **geometry only — no state read** — so
+writing it is a **single-lock `state.set(ui, v)`** (never `peek` then `set`,
+which would collide on the Mutex; see CLAUDE.md). value → thumb center x inverts
+the same map (`slider_thumb_center_x`, used by paint). Programmatic
+`drag_to(id, x)` / `set_value(id, v)` / `slider_value(id)` are the
+headless-testable surface.
+
+It **hit-tests correctly inside scrolled lists**: `hit_tree` matches sliders and
+already accounts for the list scroll offset/clip, and the X-axis value math is
+unaffected by vertical scroll (capture stores the id; `pointer_move` maps screen
+x against the slider's content-space x, identical for vertical-only scroll).
+
+- **Paint** (no new op): a track bar (`fill_round_rect`), a filled portion from
+  the track left to the thumb, and the thumb (a rounded square) centered at the
+  value's x.
+- **Layout**: fixed `width`, one row tall.
+
+The `State[Int]` is held in a per-`Col` int pool (`Array[State[Int]]` + a
+node-id→index hash) alongside per-slider `min`/`max`/`width`. Pinned by
+`tests/slider.rx`. Vertical, range (two-thumb), and float sliders are deferred
+(additive).
+
 ## Why it must stay pinned with tests
 
 The static-vs-reactive boundary is the single rule users rely on for
