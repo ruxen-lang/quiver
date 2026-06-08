@@ -13,6 +13,8 @@ def row_height -> Int { 24 }
 def char_width -> Int { 8 }
 def pad_x -> Int { 4 }
 def baseline_drop -> Int { 16 }
+## Checkbox box side (a square, smaller than the row so it sits inset).
+def check_box_size -> Int { 16 }
 
 ## Logical key codes for `App.key_down`. Printable input is the character's
 ## ASCII code (32-126, which is also the SDL keycode for those keys), so a key
@@ -175,6 +177,8 @@ class App
         self.root.push_iw(0)
       elsif self.root.input_at(i)
         self.root.push_iw(self.root.input_width_at(i))
+      elsif self.root.checkbox_at(i)
+        self.root.push_iw(self.checkbox_w(i))
       else
         self.root.push_iw(self.leaf_w(i))
       end
@@ -434,6 +438,20 @@ class App
     end
   end
 
+  ## Whether checkbox `i` is checked — read LIVE from its `State[Bool]` via a
+  ## single `peek` (no `set` in this frame, so the one-lock-per-frame rule is
+  ## satisfied). `false` when `i` is not a checkbox.
+  def checkbox_checked(i: Int) -> Bool
+    let idx = self.root.bool_index_at(i)
+    if idx < 0
+      return false
+    end
+    match self.root.bools.get(idx)
+      Some(s) -> s.peek
+      nil     -> false
+    end
+  end
+
   ## A key-down event: route to the focused input. Printable ASCII (32-126)
   ## inserts that char at the caret; `key_backspace` deletes the char before
   ## the caret; `key_left`/`key_right` move the caret. No-op when nothing is
@@ -489,6 +507,15 @@ class App
   def leaf_w(i: Int) -> Int
     let label = self.text_of(i)
     (label.size as Int) * char_width() + pad_x() * 2
+  end
+
+  ## Width of a checkbox: leading pad + box + gap + label width + trailing pad.
+  ## (The label is the static `label_at`; checkbox computes hold a sentinel, not
+  ## the display text, so read the label directly.)
+  def checkbox_w(i: Int) -> Int
+    let label = self.root.label_at(i)
+    let label_w = (label.size as Int) * char_width()
+    pad_x() + check_box_size() + pad_x() + label_w + pad_x()
   end
 
   def contains(i: Int, x: Int, y: Int) -> Bool

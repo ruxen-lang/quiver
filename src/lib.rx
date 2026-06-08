@@ -57,6 +57,11 @@ class Ui
     State[String].new(self.fresh_id, initial)
   end
 
+  ## Create a fresh reactive Bool state owned by this graph.
+  def var state_bool(initial: Bool) -> State[Bool]
+    State[Bool].new(self.fresh_id, initial)
+  end
+
   ## Subscribe the currently-recording tracking scope (if any) to `state_id`.
   def var subscribe(state_id: Int) -> nil
     if self.current_scope >= 0

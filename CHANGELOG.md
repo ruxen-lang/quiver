@@ -6,6 +6,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`Checkbox` widget.** `Col.checkbox(state, label)` binds to a reactive
+  `State[Bool]` (`let agree = ui.state_bool(false)`; `root.checkbox(agree,
+  "I agree")`). The node is both a tracking scope (its compute reads the bool,
+  so it re-renders on toggle) and clickable (its handler toggles via a single
+  `state.update(ui, { |b| !b })` — single-lock RMW, not peek+set). A click on
+  the box/label region toggles → `flush` → repaints just the checkbox. Paint: a
+  bordered square (`stroke_round_rect`), a filled inner mark only when checked
+  (`fill_rect`), and the label beside it — no new display-list op. Layout: box +
+  gap + char-metric label width, one line tall. Composes inside row/col/list/
+  styled containers and hit-tests correctly through list scroll. New
+  `Ui.state_bool`. Pinned by `tests/checkbox.rx` (7 tests). Suite: **88 passed**;
+  the two `app.rx`/`counter.rx` pins stayed green and untouched.
+
 ### Fixed
 - **Hit-testing through a scrolled `List`.** `hit_test`/`pointer_down` now apply
   the same transforms the paint walk applies — a recursive walk mirroring

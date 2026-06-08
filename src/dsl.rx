@@ -42,6 +42,10 @@ def kind_list -> Int { 6 }
 ## `State[String]`. It re-renders like a `dyn_text` (its compute reads the
 ## value) and is edited via `App.key_down` at a caret (see docs/DSL.md).
 def kind_input -> Int { 7 }
+## A `Checkbox`: a clickable leaf bound to a reactive `State[Bool]`. Its compute
+## reads the bool (so it re-renders on toggle) and its handler toggles it; paint
+## draws a box + a filled mark when checked + the label (see docs/DSL.md).
+def kind_checkbox -> Int { 8 }
 
 ## Container style: padding, background fill, border, corner radius.
 ##
@@ -172,6 +176,10 @@ class Col
   values: Array[State[String]]
   value_of: Hash[Int, Int]
   input_width_of: Hash[Int, Int]
+  ## Checkbox value pool: each checkbox's reactive `State[Bool]`, with `bool_of`
+  ## mapping node id -> pool index. `App` peeks it for paint (checked state).
+  bools: Array[State[Bool]]
+  bool_of: Hash[Int, Int]
 
   def init
     self.kinds = Array.new
@@ -201,6 +209,8 @@ class Col
     self.values = Array.new
     self.value_of = Hash.new
     self.input_width_of = Hash.new
+    self.bools = Array.new
+    self.bool_of = Hash.new
   end
 
   ## Reset the intrinsic-width buffer (called at the top of each layout pass).
@@ -281,6 +291,32 @@ class Col
     self.link(id)
   end
 
+  ## A checkbox bound to a reactive `State[Bool]` with a static label. It is BOTH
+  ## a tracking scope (its compute reads `state`, so it re-renders on toggle) AND
+  ## clickable (its handler toggles `state` with a single-lock `update`). Build
+  ## it at the top level / inside a container so the captured handle is sound:
+  ##
+  ##   let agree = ui.state_bool(false)
+  ##   root.checkbox(agree, "I agree")
+  def var checkbox(state: State[Bool], label: &str) -> nil
+    let id = self.size
+    self.kinds.push(kind_checkbox())
+    self.labels.push(String.from(label))
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui|
+      if state.get(ui2)
+        String.from("y")
+      else
+        String.from("n")
+      end
+    })
+    self.handler_of.push(self.handlers.size as Int)
+    self.handlers.push({ |ui2: &var Ui| state.update(ui2, { |b| !b }) })
+    self.bool_of.insert(id, self.bools.size as Int)
+    self.bools.push(state)
+    self.link(id)
+  end
+
   ## A horizontal container: the nodes built inside `build` become its
   ## children and are stacked along the X axis by the layout pass.
   def var row(build: any Fn[Fn(&var Col) -> nil]) -> nil
@@ -351,6 +387,19 @@ class Col
   ## Index into the `values` pool for input `i`, or -1.
   def value_index_at(i: Int) -> Int
     match self.value_of.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  ## True when node `i` is a checkbox.
+  def checkbox_at(i: Int) -> Bool
+    self.kind_at(i) == kind_checkbox()
+  end
+
+  ## Index into the `bools` pool for checkbox `i`, or -1.
+  def bool_index_at(i: Int) -> Int
+    match self.bool_of.get(i)
       Some(v) -> *v
       nil     -> -1
     end

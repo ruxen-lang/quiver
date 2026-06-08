@@ -240,6 +240,41 @@ The value `State[String]` is held in a per-`Col` value pool
 and corrupt the value (the "one lock per frame" landmine; see CLAUDE.md).
 Pinned by `tests/input.rx`. Selection, clipboard, and multiline are deferred.
 
+### `Checkbox`
+
+`checkbox` is a clickable widget bound to a reactive `State[Bool]`:
+
+```ruxen
+let agree = ui.state_bool(false)
+root.checkbox(agree, "I agree")
+```
+
+The node is **both** a tracking scope and clickable:
+- its **compute** reads the bool (`state.get(ui)`), so the node subscribes and
+  re-renders on toggle — reusing the reactive-child machinery;
+- its **handler** toggles the bool with a single `state.update(ui, { |b| !b })`.
+  This is a **single-lock read-modify-write** — never `peek` then `set`, which
+  would hold two Mutex locks across the frame and corrupt the value (the "one
+  lock per frame" landmine; see CLAUDE.md).
+
+A click anywhere on the box+label region runs the handler → toggle → `flush` →
+repaint just the checkbox. It composes inside `row`/`col`/`list`/styled
+containers and hit-tests correctly through list scroll (it's a handler node, so
+the scroll/clip-aware `hit_test` already covers it). `app.checkbox_checked(id)`
+reads the live checked state (a lone `peek`, no `set` in the frame — safe).
+
+- **Paint.** A bordered square (`stroke_round_rect`), a **filled inner mark**
+  (`fill_rect`, inset 3px) only when checked, and the label beside it after a
+  `pad_x` gap. No new display-list op — a filled inner square is the mark this
+  round (a real check glyph waits for Skia text/paths).
+- **Layout.** Leading pad + box (`check_box_size`) + gap + char-metric label
+  width + trailing pad, one line tall.
+
+The `State[Bool]` is held in a per-`Col` bool pool (`Array[State[Bool]]` + a
+node-id→index hash), the same index-pool pattern as inputs. `Ui.state_bool`
+mints the handle. Pinned by `tests/checkbox.rx`. A toggle/switch is the same
+node with a pill-shaped paint — deferred (additive).
+
 ## Why it must stay pinned with tests
 
 The static-vs-reactive boundary is the single rule users rely on for

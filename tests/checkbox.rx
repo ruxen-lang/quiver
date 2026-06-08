@@ -1,0 +1,95 @@
+# Pins the Checkbox widget (docs/DSL.md): a clickable box bound to a reactive
+# State[Bool]. A click toggles the bool (single-lock RMW); paint draws a border
+# box, a filled inner mark WHEN checked, and the label beside it. Headless.
+Tester.describe("checkbox — toggle, reactive paint, label") do |t: &var Tester|
+  let form = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let agree = ui.state_bool(false)
+      root.checkbox(agree, "agree")     # node 0
+    })
+  }
+
+  t.it("starts unchecked; a click toggles true, then false, then true") do
+    var app = form.()
+    t.expect(app.checkbox_checked(0)).to_eq(false)
+    app.pointer_down(2, 2)              # click the checkbox
+    app.flush
+    t.expect(app.checkbox_checked(0)).to_eq(true)
+    app.pointer_down(2, 2)
+    app.flush
+    t.expect(app.checkbox_checked(0)).to_eq(false)
+    app.pointer_down(2, 2)
+    app.flush
+    t.expect(app.checkbox_checked(0)).to_eq(true)
+  end
+
+  t.it("toggling refreshes exactly the checkbox node (targeted repaint)") do
+    var app = form.()
+    app.pointer_down(2, 2)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(1)
+    ArrayMatcher.new(&refreshed).to_include(0)
+  end
+
+  t.it("the box is one line tall and sized to box + gap + label") do
+    var app = form.()
+    t.expect(app.h_of(0)).to_eq(row_height())
+    # "agree" = 5 chars; width = pad_x + box + gap + 5*char_width + pad_x
+    let expected = pad_x() + check_box_size() + pad_x() + 5 * char_width() + pad_x()
+    t.expect(app.w_of(0)).to_eq(expected)
+  end
+
+  t.it("unchecked paints the border box, NO inner mark, then the label") do
+    var app = form.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + border box + label  (no inner mark when unchecked)
+    t.expect(surface.size).to_eq(3)
+    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    # border box: stroke at (pad_x, 4), box size, 0 radius, 1px, grey
+    t.expect(surface.command_at(1)).to_eq(String.from("stroke_rect(#{pad_x()},4,#{check_box_size()},#{check_box_size()},0,1,80,80,80)"))
+    # label sits after the box + gap
+    t.expect(surface.command_at(2)).to_eq(String.from("text('agree',#{pad_x() + check_box_size() + pad_x()},#{baseline_drop()})"))
+  end
+
+  t.it("checked paints the border box AND a filled inner mark, then the label") do
+    var app = form.()
+    app.pointer_down(2, 2)             # check it
+    app.flush
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + border box + inner mark + label  (4 commands)
+    t.expect(surface.size).to_eq(4)
+    t.expect(surface.command_at(1)).to_eq(String.from("stroke_rect(#{pad_x()},4,#{check_box_size()},#{check_box_size()},0,1,80,80,80)"))
+    # inner mark: filled square inset 3px inside the box
+    t.expect(surface.command_at(2)).to_eq(String.from("rect(#{pad_x() + 3},7,#{check_box_size() - 6},#{check_box_size() - 6},40,40,40)"))
+    t.expect(surface.command_at(3)).to_eq(String.from("text('agree',#{pad_x() + check_box_size() + pad_x()},#{baseline_drop()})"))
+  end
+
+  t.it("an initially-true checkbox paints checked from the first frame") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let on = ui.state_bool(true)
+      root.checkbox(on, "on")
+    })
+    t.expect(app.checkbox_checked(0)).to_eq(true)
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + box + inner mark + label
+    t.expect(surface.size).to_eq(4)
+    t.expect(surface.op_at(2)).to_eq(op_rect())
+  end
+
+  t.it("composes inside a row beside other widgets") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let flag = ui.state_bool(false)
+      root.row({ |c: &var Col|
+        c.text("ok?")
+        c.checkbox(flag, "yes")
+      })
+    })
+    # node 0 = row, 1 = text, 2 = checkbox; clicking the checkbox toggles it
+    app.pointer_down(app.x_of(2) + 1, app.y_of(2) + 1)
+    app.flush
+    t.expect(app.checkbox_checked(2)).to_eq(true)
+  end
+end

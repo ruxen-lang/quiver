@@ -129,6 +129,13 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       quiver uses logical key codes the shell maps SDL onto. Pinned by
       `tests/input.rx`. (Selection, clipboard, multiline, real text metrics for
       the caret deferred.)
+- [x] Checkbox — `Col.checkbox(state, label)` bound to a reactive `State[Bool]`:
+      click toggles via a single-lock `state.update(ui, { |b| !b })`, the node
+      re-renders on toggle, paint draws a bordered box + a filled inner mark when
+      checked + the label (no new op). Composes in row/col/list/styled and
+      hit-tests through list scroll. New `Ui.state_bool`. Pinned by
+      `tests/checkbox.rx`. (A toggle/switch variant would be the same node with a
+      pill-shaped paint — additive.)
 - [x] Styling — **padding, background, border** (v1) on `row`/`col` via a small
       `Style` value (`row_styled`/`col_styled`): padding insets children and
       grows the box; background (`fill_round_rect`) + border (`stroke_round_rect`)

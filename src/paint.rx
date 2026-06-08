@@ -260,6 +260,10 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
     paint_input(app, surface, i)
     return
   end
+  if app.root.checkbox_at(i)
+    paint_checkbox(app, surface, i)
+    return
+  end
   let x = app.x_of(i)
   let y = app.y_of(i)
   if app.root.kind_at(i) == kind_button()
@@ -267,6 +271,24 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   end
   let label = app.text_of(i)
   surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
+end
+
+## Paint a checkbox: a bordered square box, a filled inner mark WHEN checked,
+## and the label beside it. The box sits inset by `pad_x`; the label follows
+## after a `pad_x` gap. (Read the label via `label_at` — a checkbox's compute
+## holds a reactive sentinel, not the display text.)
+def paint_checkbox[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  let x = app.x_of(i)
+  let y = app.y_of(i)
+  let bx = x + pad_x()
+  let by = y + 4
+  let box = check_box_size()
+  surface.stroke_round_rect(bx, by, box, box, 0, 1, 80, 80, 80)
+  if app.checkbox_checked(i)
+    surface.fill_rect(bx + 3, by + 3, box - 6, box - 6, 40, 40, 40)
+  end
+  let label = app.root.label_at(i)
+  surface.draw_text(&label, bx + box + pad_x(), y + baseline_drop(), 20, 20, 20)
 end
 
 ## Paint a text input: a light field box, its text, and — only when focused — a
