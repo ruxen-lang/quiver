@@ -107,7 +107,7 @@ def drive(win0: Window) -> nil
   })
   var surface = RecordingSurface.new
 
-  let shown = match win.show_scaled(3)
+  let shown = match win.show_gpu_scaled(3)
     Ok(_)  -> true
     Err(e) -> announce_headless(e)
   end
