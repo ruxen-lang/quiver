@@ -38,6 +38,17 @@ def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
         surface.x_at(i) as Float32, surface.y_at(i) as Float32,
         surface.w_at(i) as Float32, surface.h_at(i) as Float32)
       let _ = canvas.stroke_round_rect(rect, surface.rad_at(i) as Float32, surface.sw_at(i) as Float32, col)
+    elsif op == op_save()
+      let _ = canvas.save
+    elsif op == op_clip()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.clip_rect(rect)
+    elsif op == op_translate()
+      let _ = canvas.translate(surface.x_at(i) as Float32, surface.y_at(i) as Float32)
+    elsif op == op_restore()
+      let _ = canvas.restore
     else
       let label = surface.text_at(i)
       let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)

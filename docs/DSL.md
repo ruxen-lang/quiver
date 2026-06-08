@@ -134,6 +134,52 @@ as the tree links; absent ⇒ unstyled), not a recursive/`Option`-typed field.
 Pinned by `tests/style.rx`. Per-side padding, margins, and gradient/shadow
 fills are deferred — additive on the same `Style`, no API break.
 
+### Vertically-scrolling `List`
+
+A `list` is a `col`-like vertical container with a **fixed viewport height**: it
+clips its children and scrolls them when the content overflows.
+
+```ruxen
+root.list(96, { |c: &var Col|     # 96px viewport
+  c.text("row 1")
+  c.text("row 2")
+  c.text("row 3")
+  c.text("row 4")                 # below the viewport — clipped until scrolled
+})
+```
+
+- **Layout.** The list's box is its viewport height (it does **not** grow to fit
+  its children, unlike `row`/`col`). Children lay out in *content space* —
+  natural, offset-free positions — and the list records its content height (sum
+  of child heights) for clamping. So `app.y_of(child)` is the unscrolled
+  position; the on-screen position is `y_of(child) - app.scroll_of(list)`.
+- **Scroll state** lives on `App` (runtime, like geometry), keyed by the list's
+  node id:
+
+  | Call | Effect |
+  |---|---|
+  | `app.scroll_to(list_id, offset)` | set offset, clamped to `[0, content − viewport]`, then re-arrange |
+  | `app.scroll_by(list_id, dy)` | scroll by a delta (clamped) |
+  | `app.scroll_of(list_id)` | current offset |
+  | `app.content_height_of(list_id)` | laid-out content height |
+
+- **Paint.** The paint pass became a recursive tree walk (identical output to the
+  old flat id loop for un-nested trees — the pins prove it). A list wraps its
+  children in `push_clip(viewport)` + `push_translate(0, -offset)` and a closing
+  `pop_state` — display-list ops `op_save` / `op_clip` / `op_translate` /
+  `op_restore`, replayed onto canvas `save` / `clip_rect` / `translate` /
+  `restore`. Off-viewport children still record, but the clip masks them.
+- **Scroll input.** Canvas's `Event` enum has no wheel/scroll variant
+  (PointerMove/Down/Up, KeyDown, Resize, CloseRequested), so a windowed shell
+  drives scrolling by **drag** (pointer down then move adjusts the offset via
+  `scroll_by`); the programmatic `scroll_to`/`scroll_by` are the headless-testable
+  surface and what the drag handler calls.
+
+Viewport height is stored in a per-node `Int` hash on `Col` (flat-arena
+discipline; absent ⇒ not a list), keyed by `kind_list`. Pinned by
+`tests/list.rx`. Horizontal scroll, virtualization, scrollbars, and an
+offset-aware hit-test for interactive list children are deferred (additive).
+
 ## Why it must stay pinned with tests
 
 The static-vs-reactive boundary is the single rule users rely on for

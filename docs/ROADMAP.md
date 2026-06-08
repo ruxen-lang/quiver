@@ -109,7 +109,15 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
 
 ### Widgets (after foundation + layout)
 
-- [ ] Lists (scrolling — needs canvas clip/layer, both now available).
+- [x] Lists (vertical scroll) — `Col.list(viewport_h, build)`: a fixed-viewport
+      container that clips + scrolls its children by an offset. Layout keeps the
+      box at the viewport and lays children out in content space; paint wraps the
+      children in `save`/`clip`/`translate(-offset)`/`restore`
+      (`op_save`/`op_clip`/`op_translate`/`op_restore` → canvas
+      `save`/`clip_rect`/`translate`/`restore`). Scroll via `scroll_to`/`scroll_by`
+      (clamped) + drag-to-scroll (no wheel `Event`). Pinned by `tests/list.rx`.
+      (Horizontal scroll, virtualization, scrollbars, offset-aware hit-test for
+      interactive list children deferred.)
 - [ ] Inputs (text field; needs key events + caret).
 - [x] Styling — **padding, background, border** (v1) on `row`/`col` via a small
       `Style` value (`row_styled`/`col_styled`): padding insets children and

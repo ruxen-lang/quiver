@@ -7,6 +7,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Vertically-scrolling `List`.** `Col.list(viewport_h, build)` builds a
+  `Col`-like container with a FIXED viewport height that clips its children and
+  scrolls them by an offset. Layout: the list's box is its viewport (it does
+  NOT grow to fit children); children lay out in content space (offset-free) and
+  the content height is tracked for clamping. Scroll is runtime state on `App`:
+  `scroll_to(list_id, offset)` / `scroll_by(list_id, dy)` clamp to
+  `[0, content - viewport]` and re-arrange; `scroll_of` / `content_height_of`
+  expose it (all headless-testable). Paint (recursive walk now) wraps a list's
+  children in `push_clip(viewport)` + `push_translate(0, -offset)` and a closing
+  `pop_state`, so off-viewport children are masked and content is scrolled —
+  four new display-list ops `op_save` / `op_clip` / `op_translate` /
+  `op_restore`, replayed onto canvas `save` / `clip_rect` / `translate` /
+  `restore` in the example binary. Canvas's `Event` has no wheel variant, so
+  scroll input is **drag-to-scroll** (pointer down→move) plus the programmatic
+  API. Pinned by `tests/list.rx` (6 tests). Suite: **65 passed**; the two
+  `app.rx`/`counter.rx` pins stayed green and untouched.
 - **Container styling: padding, background, border.** A small `Style` value
   (`Style.new.pad(8).background(r,g,b).border(w,r,g,b).radius(n)`, chainable)
   applied to a container via `Col.row_styled(style, build)` /

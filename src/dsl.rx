@@ -34,6 +34,10 @@ def kind_button -> Int { 3 }
 ## see docs/LAYOUT.md).
 def kind_row -> Int { 4 }
 def kind_col -> Int { 5 }
+## A `List` is a `Col`-like vertical container with a FIXED viewport height: it
+## clips its children and scrolls them by an offset when the content overflows
+## (see docs/DSL.md). Its box is the viewport, not the content extent.
+def kind_list -> Int { 6 }
 
 ## Container style: padding, background fill, border, corner radius.
 ##
@@ -154,6 +158,8 @@ class Col
   border_g_of: Hash[Int, Int]
   border_b_of: Hash[Int, Int]
   corner_of: Hash[Int, Int]
+  ## Per-list fixed viewport height (px), id-indexed; absent ⇒ not a list.
+  viewport_of: Hash[Int, Int]
 
   def init
     self.kinds = Array.new
@@ -179,6 +185,7 @@ class Col
     self.border_g_of = Hash.new
     self.border_b_of = Hash.new
     self.corner_of = Hash.new
+    self.viewport_of = Hash.new
   end
 
   ## Reset the intrinsic-width buffer (called at the top of each layout pass).
@@ -264,6 +271,15 @@ class Col
     self.container(kind_col(), build)
   end
 
+  ## A vertically-scrolling list: a `Col`-like container with a FIXED viewport
+  ## height. Children stack on Y but are clipped to `viewport_h` and scrolled by
+  ## an offset (App.scroll_to / scroll_by) when the content overflows.
+  def var list(viewport_h: Int, build: any Fn[Fn(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.viewport_of.insert(id, viewport_h)
+    self.container(kind_list(), build)
+  end
+
   ## Kind of node `i`, or 0 if out of range.
   def kind_at(i: Int) -> Int
     match self.kinds.get(i)
@@ -272,10 +288,23 @@ class Col
     end
   end
 
-  ## True when node `i` is a container (row/col) that owns children.
+  ## True when node `i` is a container (row / col / list) that owns children.
   def container_at(i: Int) -> Bool
     let k = self.kind_at(i)
-    k == kind_row() || k == kind_col()
+    k == kind_row() || k == kind_col() || k == kind_list()
+  end
+
+  ## True when node `i` is a scrolling list.
+  def list_at(i: Int) -> Bool
+    self.kind_at(i) == kind_list()
+  end
+
+  ## Fixed viewport height of list `i`, or 0 (not a list / out of range).
+  def viewport_at(i: Int) -> Int
+    match self.viewport_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
   end
 
   ## First child of node `i`, or -1 (leaf / out of range).

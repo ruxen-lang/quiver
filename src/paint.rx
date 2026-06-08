@@ -16,12 +16,18 @@
 ##   draw_text(text, x, y, r, g, b)        — one line, baseline at (x, y)
 ##   fill_round_rect(x, y, w, h, radius, r, g, b)          — filled, rounded
 ##   stroke_round_rect(x, y, w, h, radius, width, r, g, b) — border stroke
+##   push_clip(x, y, w, h)                 — save state + intersect clip to rect
+##   push_translate(dx, dy)                — translate the coordinate system
+##   pop_state()                           — restore the last save
 mixin PaintSurface
   def fill_clear(r: Int, g: Int, b: Int) -> nil
   def fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
   def draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
   def fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
   def stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+  def push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+  def push_translate(dx: Int, dy: Int) -> nil
+  def pop_state -> nil
 end
 
 ## Display-list op codes (plain Ints, like the node kinds in `dsl.rx`).
@@ -33,6 +39,14 @@ def op_text -> Int { 2 }
 ## `rad`/`sw` parallel arrays on `RecordingSurface`.
 def op_round_rect -> Int { 3 }
 def op_stroke_rect -> Int { 4 }
+## Scroll/clip ops (a list clips its viewport + translates by -offset). `op_save`
+## pushes state, `op_clip` intersects the clip to a rect, `op_translate` shifts
+## the origin by (x, y), `op_restore` pops back. `op_save` is paired with the
+## clip; the example binary issues one canvas `save` then `clip_rect`.
+def op_save -> Int { 5 }
+def op_clip -> Int { 6 }
+def op_translate -> Int { 7 }
+def op_restore -> Int { 8 }
 
 ## The one concrete PaintSurface. It records every primitive twice over:
 ##   - as a formatted STRING (`command_at` — the headless double the test
@@ -106,6 +120,23 @@ class RecordingSurface
   def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
     self.commands.push("stroke_rect(#{x},#{y},#{w},#{h},#{radius},#{width},#{r},#{g},#{b})")
     self.record2(op_stroke_rect(), x, y, w, h, r, g, b, radius, width, String.from(""))
+  end
+
+  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+    self.commands.push("save")
+    self.record(op_save(), 0, 0, 0, 0, 0, 0, 0, String.from(""))
+    self.commands.push("clip(#{x},#{y},#{w},#{h})")
+    self.record(op_clip(), x, y, w, h, 0, 0, 0, String.from(""))
+  end
+
+  def var push_translate(dx: Int, dy: Int) -> nil
+    self.commands.push("translate(#{dx},#{dy})")
+    self.record(op_translate(), dx, dy, 0, 0, 0, 0, 0, String.from(""))
+  end
+
+  def var pop_state -> nil
+    self.commands.push("restore")
+    self.record(op_restore(), 0, 0, 0, 0, 0, 0, 0, String.from(""))
   end
 
   def size -> Int
@@ -250,15 +281,39 @@ def paint_container_style[S: PaintSurface](app: &App, surface: &var S, i: Int) -
   end
 end
 
-## Full paint: clear, then every node in tree order. Used for the first
-## frame and after resize.
+## Full paint: clear, then walk the tree in order. Used for the first frame and
+## after resize. A recursive walk (parent self, then children) — identical
+## output to a flat id loop for un-nested trees, but it lets a `List` scope a
+## clip + translate around its children and `restore` after them.
 def paint_all[S: PaintSurface](app: &App, surface: &var S) -> nil
   surface.fill_clear(255, 255, 255)
-  var i = 0
-  let n = app.root.size
-  while i < n
-    paint_node(app, surface, i)
-    i = i + 1
+  var node = app.root.root_head
+  while node >= 0
+    paint_tree(app, surface, node)
+    node = app.root.next_sibling_of(node)
+  end
+end
+
+## Paint node `i` and (if a container) its children. A `List` wraps its children
+## in `push_clip(viewport)` + `push_translate(0, -scroll)` and a closing
+## `pop_state`, so off-viewport children are masked and content is shifted.
+def paint_tree[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  paint_node(app, surface, i)
+  if !app.root.container_at(i)
+    return
+  end
+  let is_list = app.root.list_at(i)
+  if is_list
+    surface.push_clip(app.x_of(i), app.y_of(i), app.w_of(i), app.h_of(i))
+    surface.push_translate(0, 0 - app.scroll_of(i))
+  end
+  var c = app.root.first_child_of(i)
+  while c >= 0
+    paint_tree(app, surface, c)
+    c = app.root.next_sibling_of(c)
+  end
+  if is_list
+    surface.pop_state
   end
 end
 

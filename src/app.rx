@@ -27,6 +27,11 @@ class App
   ## Widest row ever laid out (monotonic). paint_dirty erases this full
   ## span so a shrinking label can never leave ghost pixels behind.
   span_w: Int
+  ## Per-list scroll state, node-id-keyed (runtime state, like geometry):
+  ## `scroll` is the current Y offset; `content_h` is the laid-out content
+  ## height (sum of child heights), used to clamp the offset.
+  scroll: Hash[Int, Int]
+  content_h: Hash[Int, Int]
 
   def init
     self.ui = Ui.new
@@ -37,6 +42,8 @@ class App
     self.geom_w = Hash.new
     self.geom_h = Hash.new
     self.span_w = 0
+    self.scroll = Hash.new
+    self.content_h = Hash.new
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -178,11 +185,16 @@ class App
     inner + self.root.pad_at(i) * 2
   end
 
-  ## Intrinsic height of node `i`. Containers grow by `2*pad`.
+  ## Intrinsic height of node `i`. Containers grow by `2*pad`; a List is the
+  ## exception — its box is its FIXED viewport height, not the content extent.
   ##   leaf -> one row
   ##   Row  -> max of children heights + 2*pad
   ##   Col  -> sum of children heights + 2*pad
+  ##   List -> its fixed viewport height
   def measure_h(i: Int) -> Int
+    if self.root.list_at(i)
+      return self.root.viewport_at(i)
+    end
     if !self.root.container_at(i)
       return row_height()
     end
@@ -199,6 +211,18 @@ class App
     end
     let inner = self.axis_extent(i, total, maxh, kind_col())
     inner + self.root.pad_at(i) * 2
+  end
+
+  ## Sum of a list's children heights — the scrollable content extent, used to
+  ## clamp the offset. (A list does not grow to this; its box is the viewport.)
+  def content_height(i: Int) -> Int
+    var total = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      total = total + self.measure_h(c)
+      c = self.root.next_sibling_of(c)
+    end
+    total
   end
 
   ## Place node `i` (and its subtree) with its top-left at (x, y).
@@ -219,11 +243,20 @@ class App
 
   ## Lay out the children of container `i` along its axis, anchored at (x, y)
   ## plus the container's padding (children sit inside `geom - padding`).
+  ##
+  ## A List lays its children out in CONTENT space (offset-free, natural
+  ## positions); the scroll offset is applied at PAINT time via a translate, so
+  ## `y_of(child)` is the unscrolled position and the on-screen position is
+  ## `y_of(child) - scroll_of(list)`. The list records its content height for
+  ## clamping the offset.
   def var place_children(i: Int, x: Int, y: Int) -> nil
     let is_row = self.root.kind_at(i) == kind_row()
     let p = self.root.pad_at(i)
     var cx = x + p
     var cy = y + p
+    if self.root.list_at(i)
+      self.content_h.insert(i, self.content_height(i))
+    end
     var c = self.root.first_child_of(i)
     while c >= 0
       self.place_node(c, cx, cy)
@@ -273,6 +306,35 @@ class App
     end
   end
 
+  ## Current scroll offset of list `i` (0 if unscrolled / not a list).
+  def scroll_of(i: Int) -> Int
+    match self.scroll.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  ## Laid-out content height of list `i` (sum of child heights), 0 if absent.
+  def content_height_of(i: Int) -> Int
+    match self.content_h.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  ## Scroll list `i` to an absolute offset, clamped to [0, content - viewport],
+  ## then re-lay-out so the children's geometry reflects the new offset.
+  def var scroll_to(i: Int, offset: Int) -> nil
+    self.scroll.insert(i, self.clamp_scroll(i, offset))
+    self.arrange
+  end
+
+  ## Scroll list `i` by a delta (positive scrolls content up / further down the
+  ## list), clamped and re-laid-out.
+  def var scroll_by(i: Int, dy: Int) -> nil
+    self.scroll_to(i, self.scroll_of(i) + dy)
+  end
+
   ## Topmost interactive node containing (x, y), or -1.
   def hit_test(x: Int, y: Int) -> Int
     var i = 0
@@ -299,6 +361,22 @@ class App
   end
 
   private
+
+  ## Clamp a desired scroll offset for list `i` to [0, content - viewport].
+  ## Content shorter than the viewport pins the offset at 0.
+  def clamp_scroll(i: Int, offset: Int) -> Int
+    let max_off = self.content_height(i) - self.root.viewport_at(i)
+    if max_off <= 0
+      return 0
+    end
+    if offset < 0
+      return 0
+    end
+    if offset > max_off
+      return max_off
+    end
+    offset
+  end
 
   ## Text width of a leaf node (char-metric estimate until Skia metrics land).
   def leaf_w(i: Int) -> Int
