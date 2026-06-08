@@ -1,0 +1,231 @@
+## todo — a dynamic list app proving STRUCTURAL reactivity in quiver.
+##
+## Unlike the settings panel (reactive *values* over a fixed layout), this app
+## grows and shrinks its UI: an "Add" button appends a row, "Clear done" removes
+## rows. The list is a `list_of` bound to a shared `ListModel`; mutating the
+## model rebuilds just that list's child subtree on the next flush. See
+## docs/decisions/structural-reactivity.md.
+##
+## Binary package: the canvas-facing shell (window + event loop + paint replay)
+## lives here; quiver stays platform-free. Windowed when a display exists,
+## synthetic-event headless fallback otherwise (CI-safe).
+
+## Build the app. The `ListModel` is created once and used twice — first
+## CAPTURED by the button handlers (a closure capture is a non-consuming
+## pointer-copy), then passed by value to `list_of`. Every mutation bumps the
+## model's version (single-lock RMW) → the list_of node goes dirty → flush
+## rebuilds its rows from the current items.
+def build_app -> App
+  App.build({ |ui: &var Ui, root: &var Col|
+    let todos = ui.list_model
+
+    root.text("Todo")                                              # 0 static
+
+    # Two action buttons. Their handlers capture `todos` (non-consuming) and
+    # mutate it; the row text reflects done state via the model.
+    root.row({ |c: &var Col|
+      c.button("Add", { |u: &var Ui| todos.add(u, "new task") })   # append a row
+      c.button("Toggle 0", { |u: &var Ui| todos.toggle(u, 0) })    # flip first
+      c.button("Del 0", { |u: &var Ui| todos.remove(u, 0) })       # drop first
+    })
+
+    # The reactive list: one row per item, scrolling within a fixed viewport.
+    root.list_of(todos, row_height() * 6, { |c: &var Col, m: ListModel, i: Int|
+      c.text("#{m.row_text(i)}")
+    })
+  })
+end
+
+def main
+  puts "quiver todo — dynamic list (structural reactivity)"
+  let w = 280
+  let h = 240
+  match Window.open(String.from("Todo"), w, h)
+    Ok(win) -> drive(win)
+    Err(e)  -> puts "cannot create canvas: #{e}"
+  end
+end
+
+def drive(win0: Window) -> nil
+  var win = win0
+  var app = build_app
+  var surface = RecordingSurface.new
+
+  let shown = match win.show_scaled(2)
+    Ok(_)  -> true
+    Err(e) -> announce_headless(e)
+  end
+
+  if !shown
+    run_headless(&var app, &var surface)
+    return
+  end
+
+  run_windowed(&var win, &var app, &var surface)
+end
+
+## Headless demo: drive the list structurally and show the rows after each step.
+def run_headless(app: &var App, surface: &var RecordingSurface) -> nil
+  let list = find_kind(app, kind_list_of(), 0)
+  let add = find_kind(app, kind_button(), 0)
+  let tog = find_kind(app, kind_button(), 1)
+  let del = find_kind(app, kind_button(), 2)
+
+  puts ""
+  puts "click Add ×3 (the list grows three rows):"
+  click(app, add)
+  click(app, add)
+  click(app, add)
+  dump_rows(app, list)
+
+  puts ""
+  puts "click Toggle 0 (first row's done flag flips):"
+  click(app, tog)
+  dump_rows(app, list)
+
+  puts ""
+  puts "click Del 0 (first row removed; the list shrinks):"
+  click(app, del)
+  dump_rows(app, list)
+
+  puts ""
+  puts "first frame paint = #{frame_count(app, surface)} draw commands"
+  puts "done (headless). The same App drives the windowed path identically."
+end
+
+def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface) -> nil
+  paint_all(app, surface)
+  blit(win, surface)
+
+  var running = true
+  while running
+    match win.poll_event
+      Some(ev) -> match ev
+        Event.PointerDown(x, y) -> app.pointer_down(x, y)
+        Event.PointerMove(x, y) -> app.pointer_move(x, y)
+        Event.PointerUp(x, y)   -> app.pointer_up(x, y)
+        Event.KeyDown(k)        -> app.key_down(map_platform_key(k))
+        Event.Resize(ww, hh)    -> nil
+        Event.CloseRequested    -> running = false
+      end
+      nil -> nil
+    end
+    let dirty = app.flush
+    if (dirty.size as Int) > 0
+      surface.reset
+      paint_all(app, surface)
+      blit(win, surface)
+    end
+    win.sleep_ms(16)
+  end
+  win.hide
+end
+
+## Click node `i` (pointer down at its top-left) then flush.
+def click(app: &var App, i: Int) -> nil
+  if i >= 0
+    app.pointer_down(app.x_of(i) + 2, app.y_of(i) + 2)
+    let _ = app.flush
+  end
+end
+
+## Print the current rows of the reactive list `list`.
+def dump_rows(app: &var App, list: Int) -> nil
+  var c = app.root.first_child_of(list)
+  while c >= 0
+    puts "  #{app.text_of(c)}"
+    c = app.root.next_sibling_of(c)
+  end
+end
+
+## Full-repaint a frame; return the number of draw commands recorded.
+def frame_count(app: &var App, surface: &var RecordingSurface) -> Int
+  surface.reset
+  paint_all(app, surface)
+  surface.size
+end
+
+## Find the `nth` (0-based) node of a given kind in build order, or -1.
+def find_kind(app: &var App, kind: Int, nth: Int) -> Int
+  var i = 0
+  var seen = 0
+  let n = app.root.size
+  while i < n
+    if app.root.kind_at(i) == kind
+      if seen == nth
+        return i
+      end
+      seen = seen + 1
+    end
+    i = i + 1
+  end
+  -1
+end
+
+## Replay quiver's recorded paint commands onto a real canvas (the L2->L1 seam).
+def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
+  var i = 0
+  let n = surface.size
+  while i < n
+    let op = surface.op_at(i)
+    let col = Color.rgb(surface.r_at(i) as UInt8, surface.g_at(i) as UInt8, surface.b_at(i) as UInt8)
+    if op == op_clear()
+      let _ = canvas.clear(col)
+    elsif op == op_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.draw_rect(rect, col)
+    elsif op == op_round_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.draw_round_rect(rect, surface.rad_at(i) as Float32, col)
+    elsif op == op_stroke_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.stroke_round_rect(rect, surface.rad_at(i) as Float32, surface.sw_at(i) as Float32, col)
+    elsif op == op_save()
+      let _ = canvas.save
+    elsif op == op_clip()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.clip_rect(rect)
+    elsif op == op_translate()
+      let _ = canvas.translate(surface.x_at(i) as Float32, surface.y_at(i) as Float32)
+    elsif op == op_restore()
+      let _ = canvas.restore
+    else
+      let label = surface.text_at(i)
+      let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)
+    end
+    i = i + 1
+  end
+end
+
+def map_platform_key(code: Int) -> Int
+  if code == 1073741904
+    key_left()
+  elsif code == 1073741903
+    key_right()
+  else
+    code
+  end
+end
+
+def blit(win: &var Window, surface: &RecordingSurface) -> nil
+  match win.canvas.begin_frame
+    Ok(_)  -> nil
+    Err(e) -> puts "begin_frame: #{e}"
+  end
+  replay(surface, &var win.canvas)
+  let _ = win.canvas.end_frame
+  let _ = win.present
+end
+
+def announce_headless(e: String) -> Bool
+  puts "(no OS window: #{e}) — running headless"
+  false
+end

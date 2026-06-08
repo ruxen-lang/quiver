@@ -113,8 +113,16 @@ class App
     end
   end
 
-  ## Re-run the tracking scope of node `i` (no-op for static nodes).
+  ## Re-run the tracking scope of node `i` (no-op for static nodes). For a
+  ## reactive list (`list_of`), re-running its compute re-subscribes it to the
+  ## model version; then we REBUILD its child subtree from the current model and
+  ## mount the fresh rows (run their computes once). This is the structural-
+  ## reactivity path — docs/decisions/structural-reactivity.md.
   def var refresh_node(i: Int) -> nil
+    if self.root.list_of_at(i)
+      self.refresh_list_of(i)
+      return
+    end
     let ci = self.root.compute_at(i)
     if ci >= 0
       self.ui.unsubscribe_scope(i)
@@ -124,6 +132,30 @@ class App
         nil     -> nil
       end
       self.ui.current_scope = -1
+    end
+  end
+
+  ## Refresh a reactive list: (re)subscribe its scope to the model version (so a
+  ## later mutation re-dirties it), then rebuild its child subtree from the
+  ## current model and mount the fresh rows.
+  def var refresh_list_of(i: Int) -> nil
+    self.ui.unsubscribe_scope(i)
+    self.ui.current_scope = i
+    self.root.subscribe_model(i, &var self.ui)
+    self.ui.current_scope = -1
+    self.rebuild_list(i)
+  end
+
+  ## Rebuild reactive-list `i`'s children from its model, then mount the new
+  ## rows (run any per-row computes once so they cache + subscribe).
+  def var rebuild_list(i: Int) -> nil
+    let before = self.root.size
+    self.root.build_items(i)
+    var j = before
+    let after = self.root.size
+    while j < after
+      self.refresh_node(j)
+      j = j + 1
     end
   end
 
@@ -553,6 +585,13 @@ class App
   ## Current option string shown by select `i` (its selected option).
   def select_text(i: Int) -> String
     self.root.option_at(i, self.select_value(i))
+  end
+
+  ## The `ListModel` bound to reactive-list `i` — drive it with
+  ## `add`/`remove`/`toggle` to mutate the list; the bound list rebuilds on the
+  ## next flush.
+  def list_model_of(i: Int) -> ListModel
+    self.root.model_at(i)
   end
 
   ## The focused input's node id, or -1 when nothing is focused.

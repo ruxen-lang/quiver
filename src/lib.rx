@@ -62,6 +62,12 @@ class Ui
     State[Bool].new(self.fresh_id, initial)
   end
 
+  ## Create a fresh shared `ListModel` (a dynamic list of items) owned by this
+  ## graph. Its version `State[Int]` drives rebuilds of the bound `list_of`.
+  def var list_model -> ListModel
+    ListModel.new(State[Int].new(self.fresh_id, 0))
+  end
+
   ## Subscribe the currently-recording tracking scope (if any) to `state_id`.
   def var subscribe(state_id: Int) -> nil
     if self.current_scope >= 0
@@ -172,5 +178,153 @@ class State[T: Send]
     let m = self.cell.get
     let g = m.lock_raw
     g.set(f.(g.get))
+  end
+end
+
+## The shared payload behind a `ListModel`: the item labels + done flags as
+## plain parallel arrays. `include Send` so it can live behind `SharedSync`
+## (`State[Array[…]]`/`Mutex[Array[…]]` don't construct in ruxen v1 — the
+## element type's Send-ness doesn't propagate — so we share a Send CLASS that
+## owns the arrays directly; see docs/decisions/structural-reactivity.md).
+class TodoData
+  include Send
+  labels: Array[String]
+  done: Array[Bool]
+
+  def init
+    self.labels = Array.new
+    self.done = Array.new
+  end
+end
+
+## A shared, mutable model for a reactive `list_of`. A thin handle (like
+## `State`): copying it pointer-copies the shared cell + the version, so the
+## "add" handler, a row's handler, the list's compute, and the rebuild path may
+## all hold one model and observe the same items.
+##
+##   let todos = ui.list_model
+##   todos.add(ui, "buy milk")          # mutate + bump version → list rebuilds
+##
+## `version` is a `State[Int]` the `list_of` node subscribes to; every mutator
+## bumps it through ONE `State.update` (single-lock RMW), which marks the list's
+## tracking scope dirty so `flush` rebuilds its child subtree.
+class ListModel
+  ## Reactive revision counter; the bound `list_of` subscribes to this.
+  version: State[Int]
+  ## Shared item store (labels + done flags).
+  cell: SharedSync[TodoData]
+
+  def init(@version: State[Int])
+    self.cell = SharedSync.new(TodoData.new)
+  end
+
+  ## Number of items (lock-free read).
+  def count -> Int
+    self.cell.get.labels.size as Int
+  end
+
+  ## Label of item `k`, or "" out of range.
+  def label_at(k: Int) -> String
+    match self.cell.get.labels.get(k)
+      Some(s) -> s.clone
+      nil     -> String.from("")
+    end
+  end
+
+  ## Done flag of item `k`, or false out of range.
+  def done_at(k: Int) -> Bool
+    match self.cell.get.done.get(k)
+      Some(v) -> *v
+      nil     -> false
+    end
+  end
+
+  ## Display text for a row: a checkbox-ish marker + the label.
+  def row_text(k: Int) -> String
+    if self.done_at(k)
+      "[x] #{self.label_at(k)}"
+    else
+      "[ ] #{self.label_at(k)}"
+    end
+  end
+
+  ## Subscribe the currently-recording tracking scope to this model's version
+  ## (reads the version through `get`, so the bound `list_of` re-rebuilds when a
+  ## mutation bumps it). Called by `App.refresh_node` for a reactive list.
+  def subscribe(ui: &var Ui) -> nil
+    let _ = self.version.get(ui)
+  end
+
+  ## Seed an item WITHOUT bumping the version — for initial population during
+  ## build (the list mounts from these; no flush has happened yet).
+  def seed(label: &str) -> nil
+    let d = self.cell.get
+    d.labels.push(String.from(label))
+    d.done.push(false)
+  end
+
+  ## Append an item and trigger a rebuild on the next flush.
+  def add(ui: &var Ui, label: &str) -> nil
+    let d = self.cell.get
+    d.labels.push(String.from(label))
+    d.done.push(false)
+    self.bump(&var *ui)
+  end
+
+  ## Toggle item `k`'s done flag (rebuild on next flush). Arrays have no index
+  ## assignment, so rebuild the `done` array with the one entry flipped.
+  def toggle(ui: &var Ui, k: Int) -> nil
+    let d = self.cell.get
+    var next: Array[Bool] = Array.new
+    var i = 0
+    let n = d.done.size as Int
+    while i < n
+      let cur = match d.done.get(i)
+        Some(v) -> *v
+        nil     -> false
+      end
+      if i == k
+        next.push(!cur)
+      else
+        next.push(cur)
+      end
+      i = i + 1
+    end
+    d.done = next
+    self.bump(&var *ui)
+  end
+
+  ## Remove item `k` (rebuild on next flush). Rebuild both arrays minus `k`.
+  def remove(ui: &var Ui, k: Int) -> nil
+    let d = self.cell.get
+    var nl: Array[String] = Array.new
+    var nd: Array[Bool] = Array.new
+    var i = 0
+    let n = d.labels.size as Int
+    while i < n
+      if i != k
+        match d.labels.get(i)
+          Some(s) -> nl.push(s.clone)
+          nil     -> nil
+        end
+        let dn = match d.done.get(i)
+          Some(v) -> *v
+          nil     -> false
+        end
+        nd.push(dn)
+      end
+      i = i + 1
+    end
+    d.labels = nl
+    d.done = nd
+    self.bump(&var *ui)
+  end
+
+  private
+
+  ## Bump the version through ONE `State.update` — single-lock RMW that marks
+  ## the bound list's tracking scope dirty for the next flush.
+  def bump(ui: &var Ui) -> nil
+    self.version.update(ui, { |v| v + 1 })
   end
 end

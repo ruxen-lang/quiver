@@ -7,6 +7,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Structural reactivity — dynamic lists (`list_of`).** The first opt-in
+  construct that grows/shrinks the tree in response to state, without breaking
+  the build-once rule for everything else. `Col.list_of(model, viewport_h,
+  item_builder)` binds to a shared `ListModel` (`ui.list_model`), a `Send` class
+  holding the items (labels + done flags) + a reactive `State[Int]` version.
+  `model.add/toggle/remove(ui, …)` edit the items and bump the version through a
+  single `State.update` (single-lock RMW); the bound list subscribes to it, so a
+  mutation marks the list dirty and `App.flush` REBUILDS its child subtree
+  wholesale (clear the child chain, build one row per item, re-arrange + repaint
+  — just that subtree). Reuses the scroll/clip `list` machinery. Design:
+  `docs/decisions/structural-reactivity.md` (an ADR). Pinned by
+  `tests/dynamic_list.rx` (7 tests); demoed by the new **`examples/todo`** (a
+  real add/toggle/remove app). Suite: **114 passed**; the `app.rx`/`counter.rx`
+  pins stayed green and untouched. Deferred (per the ADR): keyed diffing / row
+  reuse, per-item reactive widgets, reorder/animation.
 - **`examples/settings` — a multi-file example + "how to write a quiver app"
   tutorial.** A reactive settings panel split into `state.rx` (model: option
   lists, fixed rows, label helpers), `views.rx` (the UI as composable view

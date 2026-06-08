@@ -55,6 +55,11 @@ def kind_slider -> Int { 9 }
 ## (so the trigger reflects the selection); clicking it opens an `App` overlay
 ## popup of the options. See docs/DSL.md.
 def kind_select -> Int { 10 }
+## A `ListOf` (reactive/dynamic list): like `List` (fixed viewport, clip +
+## scroll) but its children are REBUILT from a shared `ListModel` whenever the
+## model's version changes. The one structural-reactivity construct — see
+## docs/decisions/structural-reactivity.md.
+def kind_list_of -> Int { 11 }
 
 ## Container style: padding, background fill, border, corner radius.
 ##
@@ -205,6 +210,13 @@ class Col
   option_start_of: Hash[Int, Int]
   option_count_of: Hash[Int, Int]
   select_width_of: Hash[Int, Int]
+  ## Reactive-list (`list_of`) pools: the bound `ListModel` and the per-item
+  ## builder closure, each indexed by node id. `App` reads `models`/`item_builders`
+  ## to rebuild a list's children when its model version changes.
+  models: Array[ListModel]
+  model_of: Hash[Int, Int]
+  item_builders: Array[any Fn[Fn(&var Col, ListModel, Int) -> nil]]
+  item_builder_of: Hash[Int, Int]
 
   def init
     self.kinds = Array.new
@@ -245,6 +257,10 @@ class Col
     self.option_start_of = Hash.new
     self.option_count_of = Hash.new
     self.select_width_of = Hash.new
+    self.models = Array.new
+    self.model_of = Hash.new
+    self.item_builders = Array.new
+    self.item_builder_of = Hash.new
   end
 
   ## Reset the intrinsic-width buffer (called at the top of each layout pass).
@@ -439,6 +455,70 @@ class Col
     self.container(kind_list(), build)
   end
 
+  ## A REACTIVE list: like `list`, but its children are built from a shared
+  ## `ListModel` and REBUILT whenever the model changes. The one structural-
+  ## reactivity construct (docs/decisions/structural-reactivity.md):
+  ##
+  ##   let todos = ui.list_model
+  ##   root.list_of(todos, row_height() * 6, { |c, m, i| c.text(m.row_text(i)) })
+  ##   …later, in a handler: todos.add(ui, "new")  → the list rebuilds on flush
+  ##
+  ## The node is a tracking scope: its compute reads `model.version`, so a
+  ## mutation (which bumps the version) marks this node dirty; `App.flush`
+  ## rebuilds its child subtree. The closures here use `{ … }` braces.
+  def var list_of(model: ListModel, viewport_h: Int, item_builder: any Fn[Fn(&var Col, ListModel, Int) -> nil]) -> nil
+    let id = self.size
+    self.kinds.push(kind_list_of())
+    self.labels.push(String.from(""))
+    # No compute closure: a list_of subscribes to its model's version
+    # IMPERATIVELY in `App.refresh_node` (storing the model once in the pool —
+    # `model` is non-Copy, so it can only be used once here).
+    self.compute_of.push(-1)
+    self.handler_of.push(-1)
+    self.viewport_of.insert(id, viewport_h)
+    self.model_of.insert(id, self.models.size as Int)
+    self.models.push(model)
+    self.item_builder_of.insert(id, self.item_builders.size as Int)
+    self.item_builders.push(item_builder)
+    self.link(id)
+    # NB: the initial rows are NOT built here — `App.mount` runs the list_of
+    # node's `refresh_node`, which subscribes + rebuilds (and mounts) the
+    # children from the seeded model. One build path, no duplicate.
+  end
+
+  ## (Re)build the child rows of reactive-list `id` from its current model: clear
+  ## the existing child chain, move the cursor onto the list, run the item
+  ## builder once per item (fresh child nodes append + link under the list), then
+  ## restore the cursor. Old children are orphaned (unlinked, never reached).
+  def var build_items(id: Int) -> nil
+    self.child_first.insert(id, -1)
+    self.child_last.insert(id, -1)
+    let mi = self.model_index_at(id)
+    let bi = self.item_builder_index_at(id)
+    if mi < 0 || bi < 0
+      return
+    end
+    let prev = self.parent_cursor
+    self.parent_cursor = id
+    self.run_item_builder(id, mi, bi)
+    self.parent_cursor = prev
+  end
+
+  ## Subscribe the recording scope to reactive-list `id`'s model version
+  ## (fetches a fresh model copy and calls `ListModel.subscribe`). `App` calls
+  ## this while the list's tracking scope is current, so a later version bump
+  ## marks the list dirty.
+  def var subscribe_model(id: Int, ui: &var Ui) -> nil
+    let mi = self.model_index_at(id)
+    if mi < 0
+      return
+    end
+    match self.models.get(mi)
+      Some(m) -> m.subscribe(&var *ui)
+      nil     -> nil
+    end
+  end
+
   ## Kind of node `i`, or 0 if out of range.
   def kind_at(i: Int) -> Int
     match self.kinds.get(i)
@@ -447,15 +527,24 @@ class Col
     end
   end
 
-  ## True when node `i` is a container (row / col / list) that owns children.
+  ## True when node `i` is a container (row / col / list / list_of) that owns
+  ## children.
   def container_at(i: Int) -> Bool
     let k = self.kind_at(i)
-    k == kind_row() || k == kind_col() || k == kind_list()
+    k == kind_row() || k == kind_col() || k == kind_list() || k == kind_list_of()
   end
 
-  ## True when node `i` is a scrolling list.
+  ## True when node `i` is a scrolling list — fixed (`list`) OR reactive
+  ## (`list_of`). Both clip + scroll + use a viewport, so they share the
+  ## viewport/scroll/clip machinery.
   def list_at(i: Int) -> Bool
-    self.kind_at(i) == kind_list()
+    let k = self.kind_at(i)
+    k == kind_list() || k == kind_list_of()
+  end
+
+  ## True when node `i` is a REACTIVE list (rebuilt from a `ListModel`).
+  def list_of_at(i: Int) -> Bool
+    self.kind_at(i) == kind_list_of()
   end
 
   ## True when node `i` is a text input (focusable / editable).
@@ -562,6 +651,19 @@ class Col
     match self.option_strings.get(start + k)
       Some(s) -> s.clone
       nil     -> String.from("")
+    end
+  end
+
+  ## The `ListModel` bound to reactive-list `i`. (Caller should check
+  ## `list_of_at(i)` first; returns a fresh empty model otherwise.)
+  def model_at(i: Int) -> ListModel
+    let mi = self.model_index_at(i)
+    if mi < 0
+      return ListModel.new(State[Int].new(-1, 0))
+    end
+    match self.models.get(mi)
+      Some(m) -> m
+      nil     -> ListModel.new(State[Int].new(-1, 0))
     end
   end
 
@@ -778,5 +880,58 @@ class Col
     self.parent_cursor = id
     build.(&var *self)
     self.parent_cursor = prev
+  end
+
+  ## Index into the `models` pool for reactive-list `i`, or -1.
+  def model_index_at(i: Int) -> Int
+    match self.model_of.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  ## Index into the `item_builders` pool for reactive-list `i`, or -1.
+  def item_builder_index_at(i: Int) -> Int
+    match self.item_builder_of.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  ## Run reactive-list `id`'s item builder once per model item, appending a row
+  ## subtree per item under the current cursor (already set to `id`).
+  ##
+  ## NB: a method call CONSUMES a non-Copy class receiver in this ruxen build
+  ## (`model.count` would move `model`). So we fetch a FRESH model copy from the
+  ## pool for each use — `count_of_model` (consumes its own copy) and one copy
+  ## per item for the builder call (each copy shares the same cell).
+  def var run_item_builder(id: Int, mi: Int, bi: Int) -> nil
+    let n = self.count_of_model(mi)
+    var i = 0
+    while i < n
+      match self.item_builders.get(bi)
+        Some(f) -> self.invoke_item_builder(f, id, mi, i)
+        nil     -> nil
+      end
+      i = i + 1
+    end
+  end
+
+  ## Item count of the model at pool index `mi` (fetches its own copy).
+  def count_of_model(mi: Int) -> Int
+    match self.models.get(mi)
+      Some(m) -> m.count
+      nil     -> 0
+    end
+  end
+
+  ## Invoke one item-builder call, fetching a fresh model copy from the pool so
+  ## the receiver-consuming method-call landmine never reuses one binding.
+  def var invoke_item_builder(f: &any Fn[Fn(&var Col, ListModel, Int) -> nil], id: Int, mi: Int, i: Int) -> nil
+    let m = match self.models.get(mi)
+      Some(mm) -> mm
+      nil      -> ListModel.new(State[Int].new(-1, 0))
+    end
+    f.(&var *self, m, i)
   end
 end

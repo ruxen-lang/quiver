@@ -159,6 +159,15 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       `draw_round_rect`/`stroke_round_rect` in the example binary. Pinned by
       `tests/style.rx`. (Per-side padding, margins, gradient/shadow fills deferred
       — additive on the same `Style`.)
+- [x] **Structural reactivity (dynamic lists)** — `Col.list_of(model, viewport_h,
+      item_builder)` bound to a shared `ListModel` (`ui.list_model`). Mutating the
+      model (`add`/`toggle`/`remove`, single-lock RMW that bumps a version) marks
+      the list dirty; `flush` REBUILDS its child subtree wholesale (the one opt-in
+      construct that grows/shrinks the tree — the build-once rule still holds for
+      everything else). Reuses the scroll/clip list machinery. ADR:
+      `docs/decisions/structural-reactivity.md`; pinned by `tests/dynamic_list.rx`;
+      demo: `examples/todo`. (Keyed diffing / row reuse, per-item reactive
+      widgets, reorder/animation deferred.)
 
 ### Blocked on ruxen (the no-GC promise + multi-package framework)
 

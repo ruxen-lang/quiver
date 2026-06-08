@@ -84,6 +84,18 @@ ruxen fmt <file>                  # canonical formatting
   `&Hash`/`&Set` param at compile time (`E1118`; the silent-method-miscompile
   facet was fixed alongside Q25). Still: don't pass a collection by `&` — access
   the field directly (`self.<field>.get`).
+- **Never pass a non-Copy class CALL-RESULT directly as a by-value METHOD
+  argument — `let`-bind it first** (verified 2026-06-09). `b.take(make)` where
+  `make -> SomeClass` and `take(t: SomeClass)` is a method SEGFAULTS; `let t =
+  make; b.take(t)` works. Free fns are fine; Int/Copy args are fine; only a
+  non-Copy class temporary into a *method* arg crashes (its storage is freed
+  before the call). Repro: `tmp/test-cache/ruxen-direct-callresult-method-arg-segfault.md`.
+- **No `State[Array[T]]` / `Mutex[Array[T]]` / `SharedSync[Array…]`** — the
+  Send-ness of `Array`'s element type doesn't propagate, so these don't
+  construct (`E1011`/`E1101`/`E1102`), even though `Array[Int]`/`String` are
+  `Send`. Back a shared mutable collection with a plain class that `include
+  Send` (holds the `Array` directly) and share it via `SharedSync` capture.
+  Repro: `tmp/test-cache/ruxen-state-array-send.md`.
 - **Q26 (ruxen ledger) — RESOLVED 2026-06-08.** A capturing closure stored from
   inside a self-reborrow build block (`def var container(build) … build.(&var
   *self)`) used to lose its captures (wrong Int; SEGFAULT for a captured class

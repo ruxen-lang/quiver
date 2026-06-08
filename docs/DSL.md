@@ -416,13 +416,53 @@ The patterns it teaches:
   platform-free. Forward `PointerDown/Move/Up` + `KeyDown` into `App`'s
   dispatch; flush + repaint only when the dirty set is non-empty.
 
-### Reactivity model: content, not structure
+### Reactivity model: content + (opt-in) structure
 
-quiver reacts on **content** (a state change re-runs exactly the `dyn_text`
-closures that read it). It does **not** support **structural reactivity** —
-reactively adding/removing nodes (a growing todo list, conditional subtrees).
-The builder runs once and handlers receive `&var Ui`, not `&var Col`, so there
-is no API to mutate the tree after build. Build apps that react on *values* over
-a *fixed layout* (forms, dashboards, settings). **Reactive lists / keyed
-children / remount is the recommended next framework feature**; until then,
-don't fake dynamic structure.
+quiver reacts on **content** by default: a state change re-runs exactly the
+`dyn_text` closures that read it. The builder runs once and the tree is
+otherwise fixed — `text`/`dyn_text`/`button`/`input`/… are built once. Most
+apps (forms, dashboards, settings) react on *values* over a *fixed layout*.
+
+For dynamic UIs (a todo list, a feed — anything that **adds/removes rows**),
+there is one **opt-in structural-reactivity** construct: `list_of` bound to a
+shared `ListModel`. See "Dynamic lists (`list_of`)" below and
+`docs/decisions/structural-reactivity.md`. It does **not** change the
+build-once rule for everything else — `list_of` is the only node whose children
+are rebuilt.
+
+### Dynamic lists (`list_of`)
+
+`list_of` is a scrolling list whose children are **rebuilt from a `ListModel`**
+whenever the model changes — the structural-reactivity primitive.
+
+```ruxen
+let todos = ui.list_model                         # shared, mutable item model
+root.button("Add", { |u| todos.add(u, "task") })  # handler CAPTURES the model
+root.list_of(todos, row_height() * 6, { |c, m, i| # one row per item
+  c.text(m.row_text(i))
+})
+```
+
+- **`ui.list_model`** mints a `ListModel` — a `Send` class holding the items
+  (labels + done flags) plus a reactive `State[Int]` **version**.
+- **`model.add(ui, …)` / `toggle(ui, k)` / `remove(ui, k)`** edit the items and
+  bump the version through one `State.update` (single-lock RMW). The `list_of`
+  node subscribes to that version, so a mutation marks it dirty.
+- On `flush`, the dirty `list_of` **rebuilds its child subtree wholesale**:
+  clear its child chain, build one row per current item, re-`arrange` + repaint
+  — just that subtree (the rest of the tree is untouched). It reuses the
+  `list` viewport/clip/scroll, so it scrolls and hit-tests through scroll.
+
+Two handle rules (a `ListModel` is a non-Copy handle; a *method call* consumes
+it, a *closure capture* does not):
+
+1. **Capture in handlers first, pass to `list_of` last** — `let todos =
+   ui.list_model`; capture it in the button handlers (non-consuming), then move
+   it into `list_of` (consuming) last.
+2. **Re-fetch for ad-hoc mutations** — outside a captured handler, get a fresh
+   copy with `app.list_model_of(list_node_id)` per mutation (all share the
+   items).
+
+Worked example: **`examples/todo`**. Pinned by `tests/dynamic_list.rx`. Keyed
+diffing (row reuse), per-item reactive widgets, and reordering/animation are
+deferred — see the ADR.
