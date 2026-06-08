@@ -7,6 +7,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`examples/settings` — a multi-file example + "how to write a quiver app"
+  tutorial.** A reactive settings panel split into `state.rx` (model: option
+  lists, fixed rows, label helpers), `views.rx` (the UI as composable view
+  functions), and `main.rx` (the shell: builds the app from views, runs the real
+  window + event loop, falls back to synthetic events headlessly). Exercises the
+  whole widget set idiomatically — `text`/`dyn_text` (the static-vs-reactive rule
+  shown side by side), `input`, two `checkbox`es, a `slider`, a theme `select`,
+  a scrollable `list`, `row_styled`/`col_styled` cards, and a Save `button` —
+  all heavily commented. Builds (`cd examples/settings && ruxen build`) and runs
+  windowed (live Skia) and headless (CI-safe). A new "Writing a quiver app"
+  section in `docs/DSL.md` walks through the patterns. **Honest reactivity note:
+  quiver reacts on content, not structure** — the builder runs once and handlers
+  get `&var Ui` (not `&var Col`), so reactively adding/removing nodes is not
+  supported; reactive lists / keyed children / remount is the recommended next
+  framework feature (documented in the example README + DSL.md).
 - **Overlay/popup infra.** `App` gained a single open-overlay slot
   (`overlay_owner` + anchor `overlay_x`/`overlay_y`, -1 = none) with
   `open_overlay(id, x, y)` / `close_overlay` / `overlay_open?`. The overlay

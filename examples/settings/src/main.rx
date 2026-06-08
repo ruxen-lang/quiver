@@ -1,0 +1,259 @@
+## settings — a multi-file quiver example that doubles as the "how to write a
+## quiver app" tutorial. Read state.rx (model) and views.rx (UI) alongside this.
+##
+## This is a binary package: the only place ruxen v1 lets quiver (L2) and canvas
+## (L1) symbols meet, so the canvas-facing shell (window + event loop + the
+## paint replay) lives HERE, never in quiver's `src/`. quiver paints into a
+## platform-free `RecordingSurface`; `replay` issues the matching Skia calls.
+##
+## With a display it opens a live OS window driven by the real event stream;
+## headless (CI / no display) it falls back to synthetic events through the SAME
+## pipeline, so the app runs anywhere.
+
+## ---------------------------------------------------------------------------
+## The app: compose the views into one column. This is the whole UI definition.
+##
+## NOTE the structure: every `ui.state*` handle is minted here (the build block
+## owns `&var Ui`), then handed to each view by reference. The block runs ONCE —
+## quiver reacts by re-running the `dyn_text` closures of existing nodes, not by
+## rebuilding the tree. (See README: that's the framework's reactivity model.)
+## ---------------------------------------------------------------------------
+def build_app -> App
+  App.build({ |ui: &var Ui, root: &var Col|
+    let name = ui.state_str("Ada")
+    let notify = ui.state_bool(true)
+    let dark = ui.state_bool(false)
+    let volume = ui.state(40)
+    let theme = ui.state(0)
+    let saves = ui.state(0)
+
+    header(&var *root, &name, &dark)
+    name_field(&var *root, &name)
+    toggles(&var *root, &notify, &dark)
+    volume_control(&var *root, &volume)
+    theme_picker(&var *root, &theme)
+    device_list(&var *root)
+    save_bar(&var *root, &saves)
+  })
+end
+
+def main
+  puts "quiver settings panel — multi-file example"
+  let w = 320
+  let h = 360
+  match Window.open(String.from("Settings"), w, h)
+    Ok(win) -> drive(win)
+    Err(e)  -> puts "cannot create canvas: #{e}"
+  end
+end
+
+## Own the window, build the app, and run it — windowed if an OS window opens,
+## otherwise headless with synthetic events through the real pipeline.
+def drive(win0: Window) -> nil
+  var win = win0
+  var app = build_app
+  var surface = RecordingSurface.new
+
+  let shown = match win.show_scaled(2)
+    Ok(_)  -> true
+    Err(e) -> announce_headless(e)
+  end
+
+  if !shown
+    run_headless(&var app, &var surface)
+    return
+  end
+
+  run_windowed(&var win, &var app, &var surface)
+end
+
+## Headless demo: paint the first frame, then drive a few synthetic edits and
+## show that targeted repaint only touches the changed nodes.
+def run_headless(app: &var App, surface: &var RecordingSurface) -> nil
+  puts ""
+  puts "first frame (full paint): #{frame_count(app, surface)} draw commands"
+
+  # Toggle the "dark mode" checkbox (3rd card holds the two checkboxes; we hit
+  # it by its node id via the public API rather than guessing pixels).
+  puts ""
+  puts "toggle dark mode -> header + toggles line repaint:"
+  let cb = find_kind(app, kind_checkbox(), 1)   # the 2nd checkbox (dark)
+  if cb >= 0
+    app.pointer_down(app.x_of(cb) + 2, app.y_of(cb) + 2)
+    report_repaint(app, surface)
+  end
+
+  # Nudge the volume slider to its far right (max).
+  puts ""
+  puts "drag volume slider to max:"
+  let sl = find_kind(app, kind_slider(), 0)
+  if sl >= 0
+    app.pointer_down(app.x_of(sl) + 2, app.y_of(sl) + 2)
+    app.drag_to(sl, app.x_of(sl) + 1000)
+    report_repaint(app, surface)
+  end
+
+  # Open the theme dropdown and choose "Dark" (option index 2).
+  puts ""
+  puts "open theme select, choose option 2:"
+  let se = find_kind(app, kind_select(), 0)
+  if se >= 0
+    app.pointer_down(app.x_of(se) + 2, app.y_of(se) + 2)   # open overlay
+    app.pointer_down(app.x_of(se) + 2, app.y_of(se) + app.h_of(se) + row_height() * 2 + 2)
+    report_repaint(app, surface)
+  end
+
+  # Press Save twice.
+  puts ""
+  puts "press Save twice:"
+  let bt = find_kind(app, kind_button(), 0)
+  if bt >= 0
+    app.pointer_down(app.x_of(bt) + 2, app.y_of(bt) + 2)
+    report_repaint(app, surface)
+    app.pointer_down(app.x_of(bt) + 2, app.y_of(bt) + 2)
+    report_repaint(app, surface)
+  end
+
+  puts ""
+  puts "done (headless). The same App drives the windowed path identically."
+end
+
+## The live event loop: forward real pointer + key events into App's dispatch,
+## then flush + repaint only when something changed.
+def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface) -> nil
+  paint_all(app, surface)
+  blit(win, surface)
+
+  var running = true
+  while running
+    match win.poll_event
+      Some(ev) -> match ev
+        Event.PointerDown(x, y) -> app.pointer_down(x, y)
+        Event.PointerMove(x, y) -> app.pointer_move(x, y)
+        Event.PointerUp(x, y)   -> app.pointer_up(x, y)
+        Event.KeyDown(k)        -> app.key_down(map_platform_key(k))
+        Event.Resize(ww, hh)    -> nil
+        Event.CloseRequested    -> running = false
+      end
+      nil -> nil
+    end
+    let dirty = app.flush
+    if (dirty.size as Int) > 0
+      surface.reset
+      paint_all(app, surface)
+      blit(win, surface)
+    end
+    win.sleep_ms(16)
+  end
+  win.hide
+end
+
+## ---------------------------------------------------------------------------
+## Helpers (pure shell glue — none of this is quiver-specific).
+## ---------------------------------------------------------------------------
+
+## Full-repaint a frame; return the number of draw commands recorded.
+def frame_count(app: &var App, surface: &var RecordingSurface) -> Int
+  surface.reset
+  paint_all(app, surface)
+  surface.size
+end
+
+## Flush after an edit and print how many nodes repainted (the targeted set).
+def report_repaint(app: &var App, surface: &var RecordingSurface) -> nil
+  let dirty = app.flush
+  puts "  repainted #{dirty.size as Int} node(s)"
+  surface.reset
+  paint_all(app, surface)
+end
+
+## Find the `nth` (0-based) node of a given kind in build order, or -1. Lets the
+## headless demo target widgets by role without hard-coding node ids.
+def find_kind(app: &var App, kind: Int, nth: Int) -> Int
+  var i = 0
+  var seen = 0
+  let n = app.root.size
+  while i < n
+    if app.root.kind_at(i) == kind
+      if seen == nth
+        return i
+      end
+      seen = seen + 1
+    end
+    i = i + 1
+  end
+  -1
+end
+
+## Replay quiver's recorded paint commands onto a real canvas (the L2->L1 seam).
+def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
+  var i = 0
+  let n = surface.size
+  while i < n
+    let op = surface.op_at(i)
+    let col = Color.rgb(surface.r_at(i) as UInt8, surface.g_at(i) as UInt8, surface.b_at(i) as UInt8)
+    if op == op_clear()
+      let _ = canvas.clear(col)
+    elsif op == op_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.draw_rect(rect, col)
+    elsif op == op_round_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.draw_round_rect(rect, surface.rad_at(i) as Float32, col)
+    elsif op == op_stroke_rect()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.stroke_round_rect(rect, surface.rad_at(i) as Float32, surface.sw_at(i) as Float32, col)
+    elsif op == op_save()
+      let _ = canvas.save
+    elsif op == op_clip()
+      let rect = Rect.new(
+        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
+        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
+      let _ = canvas.clip_rect(rect)
+    elsif op == op_translate()
+      let _ = canvas.translate(surface.x_at(i) as Float32, surface.y_at(i) as Float32)
+    elsif op == op_restore()
+      let _ = canvas.restore
+    else
+      let label = surface.text_at(i)
+      let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)
+    end
+    i = i + 1
+  end
+end
+
+## Map a platform (SDL) keycode to quiver's logical key for `App.key_down`.
+## Printable ASCII (32-126) and backspace (8) ARE the SDL keycode, so they pass
+## through; SDL's arrow keysyms are large platform values we translate.
+def map_platform_key(code: Int) -> Int
+  if code == 1073741904
+    key_left()
+  elsif code == 1073741903
+    key_right()
+  else
+    code
+  end
+end
+
+## Draw the recorded frame to the OS window.
+def blit(win: &var Window, surface: &RecordingSurface) -> nil
+  match win.canvas.begin_frame
+    Ok(_)  -> nil
+    Err(e) -> puts "begin_frame: #{e}"
+  end
+  replay(surface, &var win.canvas)
+  let _ = win.canvas.end_frame
+  let _ = win.present
+end
+
+## Single-statement match-arm helper: report the headless fallback, yield false.
+def announce_headless(e: String) -> Bool
+  puts "(no OS window: #{e}) — running headless"
+  false
+end

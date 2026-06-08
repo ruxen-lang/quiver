@@ -391,3 +391,38 @@ boundary") asserts that across any number of clicks only the `dyn_text`
 node is ever refreshed; `tests/counter.rx` asserts one repaint per tap,
 zero on idle frames. If those tests change, the rule changed — that is a
 breaking design event, not a refactor.
+
+## Writing a quiver app
+
+The worked, multi-file reference is **`examples/settings`** — a reactive
+settings panel exercising the whole widget set, organised the way a real app
+is (model / views / shell), and heavily commented. Read it alongside this doc.
+The patterns it teaches:
+
+- **One build block, run once.** `App.build({ |ui, root| … })` constructs the
+  tree once; quiver reacts by re-running `dyn_text` content closures of existing
+  nodes, never by rebuilding. Structure is fixed; **values** are reactive.
+- **Views are functions.** A view is a free function `view(root: &var Col, …)`
+  that appends a subtree. Compose by calling them in order from the build block.
+  (Files in a binary package flat-merge — no `use` between them.)
+- **State by reference, deref'd to a local.** `State[T]` is non-`Copy`; a view
+  takes `&State[T]` and does `let v = *handle`. Each consumer (a builder taking
+  it by value, or a capturing closure) needs its **own** local copy.
+- **RMW is a single `update`.** Editing state goes through one
+  `state.update(ui, { |v| … })` / `set` — never `peek` then `set` (two locks per
+  frame on the same mutex corrupt the value). The widgets do this for you.
+- **The shell stays in the binary.** The window + event loop + paint `replay`
+  (the canvas-facing glue) live in the example's `main.rx`; quiver itself is
+  platform-free. Forward `PointerDown/Move/Up` + `KeyDown` into `App`'s
+  dispatch; flush + repaint only when the dirty set is non-empty.
+
+### Reactivity model: content, not structure
+
+quiver reacts on **content** (a state change re-runs exactly the `dyn_text`
+closures that read it). It does **not** support **structural reactivity** —
+reactively adding/removing nodes (a growing todo list, conditional subtrees).
+The builder runs once and handlers receive `&var Ui`, not `&var Col`, so there
+is no API to mutate the tree after build. Build apps that react on *values* over
+a *fixed layout* (forms, dashboards, settings). **Reactive lists / keyed
+children / remount is the recommended next framework feature**; until then,
+don't fake dynamic structure.

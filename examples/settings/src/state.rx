@@ -1,0 +1,58 @@
+## state.rx — the app's MODEL: the reactive state it edits, plus pure helpers.
+##
+## quiver's reactive handles (`State[T]`) are minted by `Ui` and can only be
+## created inside the build block (it owns the `&var Ui`). So the handles
+## themselves are born in `main.rx`'s `App.build` block; this file holds the
+## *model data and pure helpers* the views and handlers read — the option list
+## for the theme `select`, the fixed list of rows, and label formatters. Keeping
+## them here (one place, no UI) is the "model layer" of a quiver app.
+##
+## The reactive state this app edits (all created in main.rx's build block):
+##   name   : State[String]  — the text field's contents
+##   notify : State[Bool]    — "email notifications" checkbox
+##   dark   : State[Bool]    — "dark mode" checkbox
+##   volume : State[Int]     — 0..100 slider
+##   theme  : State[Int]     — selected index into `theme_options`
+## Editing any of them re-runs ONLY the `dyn_text` closures that read it
+## (targeted repaint) — never the whole tree.
+
+## The options shown in the theme dropdown. A pure model value: views read it,
+## the `select` widget renders it, and `theme` is an index into it.
+def theme_options -> Array[String]
+  var o: Array[String] = Array.new
+  o.push(String.from("System"))
+  o.push(String.from("Light"))
+  o.push(String.from("Dark"))
+  o.push(String.from("High contrast"))
+  o
+end
+
+## The fixed rows shown in the scrollable list. quiver's builder runs ONCE, so
+## the set of rows is fixed at build time — this returns that fixed model. (See
+## the README: structural reactivity / add-remove-row is a framework gap; this
+## app reacts on VALUES, not structure.)
+def device_rows -> Array[String]
+  var o: Array[String] = Array.new
+  o.push(String.from("Keyboard"))
+  o.push(String.from("Trackpad"))
+  o.push(String.from("Display"))
+  o.push(String.from("Speakers"))
+  o.push(String.from("Microphone"))
+  o.push(String.from("Camera"))
+  o
+end
+
+## A label formatter — pure, no state. Views call it inside a `dyn_text` closure
+## so the formatted string recomputes only when `volume` changes.
+def volume_label(v: Int) -> String
+  "Volume: #{v}%"
+end
+
+## Turn a Bool into an on/off word for display.
+def on_off(b: Bool) -> String
+  if b
+    String.from("on")
+  else
+    String.from("off")
+  end
+end

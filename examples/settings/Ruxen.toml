@@ -1,0 +1,15 @@
+[package]
+name = "settings"
+version = "0.1.0"
+edition = "2026"
+description = "A multi-file quiver example + tutorial: a reactive settings panel exercising the full widget set (input, checkbox, slider, select, list, styled containers)."
+
+[build]
+type = "binary"
+
+[dependencies]
+# Binary packages flat-merge dependency sources in ruxen v1, so this app can
+# see both quiver (L2) and canvas (L1) symbols. (Library/test builds can't —
+# that's why canvas symbols may live ONLY in a binary, never in quiver's src/.)
+quiver = { path = "../.." }
+canvas = { path = "../../../canvas" }

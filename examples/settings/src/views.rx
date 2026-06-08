@@ -1,0 +1,130 @@
+## views.rx — the UI, split into VIEW FUNCTIONS.
+##
+## A "view" in quiver is just a free function that appends a subtree to a column
+## (`root: &var Col`). Composition is calling them in order from the build
+## block. Splitting the UI this way is the idiomatic way to organise a quiver
+## app — each view owns one region and reads only the state it needs.
+##
+## Passing state into a view: `State[T]` is a non-`Copy` handle, so a view takes
+## it by reference (`&State[T]`) and derefs to a LOCAL (`let v = *vol`) that the
+## stored closures capture (a cheap pointer-copy of the shared cell — every copy
+## observes the same value). Never pass the same handle by value to two builders
+## — that moves it. Stored closures always use `{ |x| … }` braces (never
+## `do…end`, which segfaults to a free function in ruxen v1).
+
+## A small reusable style for the panel cards: padding, light background, a
+## subtle border, rounded corners. `Style` is a plain value built with chainable
+## setters; `row_styled` / `col_styled` apply it to a container.
+def card_style -> Style
+  Style.new.pad(8).background(245, 245, 248).border(1, 210, 210, 220).radius(6)
+end
+
+## The header: a STATIC title (built once, never re-evaluated) above a REACTIVE
+## summary line. This is THE one rule of the DSL, shown side by side:
+##   - `text("…")`            → static: the string is baked in at build time.
+##   - `dyn_text({ |ui| … })` → reactive: the closure is a tracking scope; it
+##     re-runs (and only this node repaints) whenever a state it READ changes.
+def header(root: &var Col, name: &State[String], dark: &State[Bool]) -> nil
+  let nm = *name
+  let dk = *dark
+  root.text("Settings")                                    # static title
+  # Reactive summary: recomputes when `name` OR `dark` changes — because the
+  # closure calls `.get(ui)` on both, it subscribes this node to both.
+  root.dyn_text({ |ui: &var Ui| "User: #{nm.get(ui)} · theme #{on_off(dk.get(ui))}" })
+end
+
+## The name field: a label + a single-line text `input` bound to `name`.
+## Typing edits `name` (single-lock RMW inside the widget) → only the bound
+## reactive nodes (here, the header summary) repaint.
+def name_field(root: &var Col, name: &State[String]) -> nil
+  let nm = *name
+  # NOTE: bind `card_style` to a `let` before passing it. Handing a function's
+  # class-value result DIRECTLY to a method argument segfaults in this ruxen
+  # build (see the example README / tmp/test-cache repro) — `let`-binding first
+  # is the (idiomatic) fix, used throughout this app.
+  let style = card_style
+  root.row_styled(style, { |c: &var Col|
+    c.text("Name:")
+    c.input(nm, 160)
+  })
+end
+
+## The toggles: two `checkbox`es bound to Bool state. A click toggles the bool
+## via `state.update(ui, { |b| !b })` (the widget does this internally — a
+## single-lock read-modify-write, never a peek+set pair). The reactive line
+## below reflects both, proving the toggles drive content.
+def toggles(root: &var Col, notify: &State[Bool], dark: &State[Bool]) -> nil
+  # Each consumer of a handle needs its OWN copy: the widget builder takes the
+  # handle by value (moves it), so the reactive read-out below derefs fresh
+  # copies. Every copy shares the same cell, so they all observe one value.
+  let nt = *notify
+  let dk = *dark
+  let nt_read = *notify
+  let dk_read = *dark
+  let style = card_style
+  root.col_styled(style, { |c: &var Col|
+    c.checkbox(nt, "Email notifications")
+    c.checkbox(dk, "Dark mode")
+    c.dyn_text({ |ui: &var Ui| "notify=#{on_off(nt_read.get(ui))}, dark=#{on_off(dk_read.get(ui))}" })
+  })
+end
+
+## The volume control: a `slider` over [0, 100] bound to `volume`, with a
+## reactive read-out. Click the track to jump; drag the thumb to scrub (the
+## drag-capture infra drives it). The label recomputes only on change.
+def volume_control(root: &var Col, volume: &State[Int]) -> nil
+  let vol_read = *volume     # captured by the read-out closure
+  let vol = *volume          # consumed by the slider builder
+  let style = card_style
+  root.col_styled(style, { |c: &var Col|
+    c.dyn_text({ |ui: &var Ui| volume_label(vol_read.get(ui)) })
+    c.slider(vol, 0, 100, 200)
+  })
+end
+
+## The theme picker: a `select` (dropdown) over `theme_options`, bound to the
+## `theme` index. Clicking the trigger opens an overlay popup ON TOP of the
+## panel; picking an option writes the index and closes; clicking outside
+## dismisses. The reactive line names the current choice.
+def theme_picker(root: &var Col, theme: &State[Int]) -> nil
+  let th = *theme
+  let style = card_style
+  let options = theme_options       # let-bind the Array before the select call
+  root.row_styled(style, { |c: &var Col|
+    c.text("Theme:")
+    c.select(th, options, 160)
+  })
+end
+
+## A scrollable `list` of devices. The list has a FIXED viewport height; if the
+## rows overflow it, they clip and scroll (programmatically via `scroll_by`, or
+## by drag in a windowed shell). The rows are a fixed model (`device_rows`) —
+## quiver's builder runs once, so we build all of them here.
+def device_list(root: &var Col) -> nil
+  let rows = device_rows
+  root.list(row_height() * 3, { |c: &var Col|
+    var i = 0
+    let n = rows.size as Int
+    while i < n
+      # Each row is static text — built once. (A row could hold reactive
+      # widgets too; here we keep it simple to show list + scroll.)
+      match rows.get(i)
+        Some(label) -> c.text("• #{label}")
+        nil         -> nil
+      end
+      i = i + 1
+    end
+  })
+end
+
+## The save bar: a `button` whose handler bumps a `saves` counter, plus a
+## reactive read-out of how many times Save was pressed. Demonstrates a plain
+## button + handler + targeted repaint of the count.
+def save_bar(root: &var Col, saves: &State[Int]) -> nil
+  let sv_click = *saves      # captured by the button handler
+  let sv_read = *saves       # captured by the read-out closure
+  root.row({ |c: &var Col|
+    c.button("Save", { |ui: &var Ui| sv_click.update(ui, { |v| v + 1 }) })
+    c.dyn_text({ |ui: &var Ui| "saved #{sv_read.get(ui)}×" })
+  })
+end
