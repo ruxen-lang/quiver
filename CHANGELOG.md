@@ -7,6 +7,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **ADR: layout engine — own simple flex vs Yoga (`docs/LAYOUT.md`).**
+  Decided **own simple main-axis stacking/flex pass in safe Ruxen**, shipped
+  incrementally (intrinsic stacking now; grow/shrink/wrap later, additively).
+  Yoga (C) rejected: it forces an FFI/C dependency into L2's 100%-safe charter,
+  couples an L2 layout concern to the L1 boundary, and is overkill for the
+  Row+Col+nesting slice. Closes the layout-engine open decision in `ROADMAP.md`.
+
+### Blocked
+- **Arena nesting + `Row` + the nested layout pass are NOT implemented this
+  cycle** — blocked by an active toolchain regression (see below). They are
+  TDD deliverables and cannot be written without a working `ruxen build`/`ruxen
+  test`; shipping unverifiable code would violate the project's pin-test
+  discipline. Carried forward in `ROADMAP.md`.
+
+### Known issues
+- **ruxen toolchain (`local-48c51aa`) cannot compile any program** — `ruxen
+  build` and `ruxen test` fail inside the embedded std/prelude (move/borrow
+  errors at fixed positions, identical for a bare `def main`). `ruxen check`
+  still passes. Documented as **Q18** in `CLAUDE.md`'s landmines with a minimal
+  repro (`tmp/test-cache/ruxen-prelude-miscompile.log`); owned by the ruxen
+  toolchain. The full quiver suite, including the `app.rx`/`counter.rx` pin
+  tests, is unrunnable in this environment until it is fixed.
+
 - **Milestone 1 (L1 integration): the counter runs as a live window.**
   `examples/counter` opens a scaled SDL2 window over canvas's Skia `Canvas`
   and drives repaint from the real engine event stream (`PointerDown` →

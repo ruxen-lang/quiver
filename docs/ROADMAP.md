@@ -73,3 +73,55 @@ event stream), `examples/counter` runs as a real windowed app:
   `Option[any Fn]` fields, `do…end` to free functions, dependency symbols
   in library/test builds, cross-package generic monomorphization, capture
   semantics under future `Drop`.
+
+## Remaining — tracked checklist
+
+Audited 2026-06-08 against `src/**` and CHANGELOG `[Unreleased]`. Ordered so the
+arena/layout foundation lands before the widgets that need it. `→ ruxen #X`
+marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
+
+> **⛔ BLOCKED (2026-06-08):** the Foundation + Row implementation below are TDD
+> deliverables and cannot proceed — the installed ruxen (`local-48c51aa`)
+> cannot `build`/`test` any program (Q18 in `CLAUDE.md`; repro in
+> `tmp/test-cache/ruxen-prelude-miscompile.log`). Resume once a bare `ruxen
+> build` succeeds. The layout ADR (design-only) was completed.
+
+### Foundation (unblocks the whole widget library — do first)
+
+- [ ] **Nested tree in the arena** *(blocked on ruxen Q18)* — today the arena is
+      effectively a flat single column. Add **child-id arrays + `-1` sentinels**
+      (recursive class types crash ruxen v1, so flat parallel arrays, per the
+      landmines) so a node can own children. Prerequisite for every container below.
+- [ ] **`Row` + generic containers** *(blocked on ruxen Q18)* — horizontal
+      stacking and arbitrary nesting on top of the arena tree. First correct
+      slice: `Row` of `Col`s.
+
+### Layout (needs a decision, then implement)
+
+- [x] **Layout-engine decision (ADR)** — `docs/LAYOUT.md` (2026-06-08): adopt an
+      **own simple main-axis stacking/flex pass in safe Ruxen**, shipped
+      incrementally; Yoga (C/FFI) rejected as a charter violation and overkill.
+- [ ] **Real layout engine** *(blocked on ruxen Q18)* — only a simple column
+      pass with **char-metric width estimates** exists. Per the ADR above,
+      implement the own-flex pass (intrinsic main-axis stacking over the nested
+      arena, generalised over axis for `Col`/`Row`) producing geometry for paint.
+- [ ] **Real text metrics** — replace char-metric estimates with canvas's Skia
+      `measure_text` once it returns true advance width (**→ canvas / ruxen**:
+      the FFI `&String` bug).
+
+### Widgets (after foundation + layout)
+
+- [ ] Lists (scrolling — needs canvas clip/layer, both now available).
+- [ ] Inputs (text field; needs key events + caret).
+- [ ] Styling — padding, background, border (maps onto canvas rrect/gradient/shadow).
+
+### Blocked on ruxen (the no-GC promise + multi-package framework)
+
+- [ ] **Real `Drop` so capture/teardown is sound** — landmines note capture is
+      *"sound today because drops don't run yet."* Long-lived widget trees need
+      deterministic teardown. **→ ruxen P0.2** (Drop elaboration discarded by
+      both backends).
+- [ ] **Drop the single-`PaintSurface` workaround** — multiple paint backends
+      need cross-package generic monomorphization. **→ ruxen Q17.**
+- [ ] **Unit-test quiver's public API directly** — `ruxen test` can't link the
+      package, so behavior is pinned through the binary. **→ ruxen Q16.**

@@ -65,3 +65,52 @@ ruxen fmt <file>                  # canonical formatting
   `#` comments at file top. Generic functions don't monomorphize for types
   defined in a *consuming* package (keep mixin impls used by quiver generics
   inside quiver).
+
+### ⛔ ACTIVE TOOLCHAIN BLOCKER (2026-06-08) — Q18: prelude/std miscompile
+
+The installed `ruxen` (`local-48c51aa`) **cannot compile anything** — not even
+a bare `def main`. `ruxen build` AND `ruxen test` both fail in std/prelude code
+that every program links, with borrow-check errors at fixed positions
+(`55:19 x defined → 56:16 moved into call → 57:18 used after move`; same at
+69, 104/106, 135; plus `cannot assign to ok/found/out — currently borrowed` at
+81/92/135/153). The positions are identical regardless of user source — they
+are inside the embedded std, not user code.
+
+Minimal repro (zero std usage, fails identically):
+
+```
+# Ruxen.toml: [build] type = "binary"
+# src/main.rx:
+def main
+  let x = 1 + 1
+end
+```
+
+→ `ruxen build` emits the move/borrow errors above and fails. Full log:
+`tmp/test-cache/ruxen-prelude-miscompile.log`.
+
+**Consequence:** the whole quiver suite (incl. the `app.rx`/`counter.rx` pin
+tests) is currently *uncompilable through no fault of quiver source* — the
+baseline cannot be run green in this environment. Any TDD work (arena nesting,
+`Row`, the layout pass) is **blocked** until the toolchain is fixed: tests
+cannot be watched fail→green and code cannot be `ruxen build`-verified.
+
+Owner: ruxen toolchain (a separate agent). File as `Q18` in
+`../ruxen/docs/dev/gui-stack-v1-issues.md` + `../ruxen/docs/TASKS.md` with the
+repro above. Re-run `ruxen build` on a bare project to confirm fixed before
+resuming quiver layout work.
+
+## Task tracking & keeping context current
+
+- **Canonical task list: [`docs/ROADMAP.md`](docs/ROADMAP.md)** — milestones,
+  resolved decisions, and the "later cycles" backlog. Single place open quiver
+  work is tracked; the workspace umbrella (`../CLAUDE.md`) links it, not duplicates it.
+- Every change updates docs in the same commit: tick/extend `docs/ROADMAP.md`,
+  add a `CHANGELOG.md` entry, and record any API deviation from the original
+  sketch in `docs/DSL.md` / `docs/REACTIVITY.md` (that's their stated job).
+  Changing `tests/app.rx` or `tests/counter.rx` is a design event — note why.
+- A new Ruxen v1 landmine is a **language task** *and* a landmine-list update: add
+  a `Q##` entry to `../ruxen/docs/dev/gui-stack-v1-issues.md` (repro + severity),
+  list it in `../ruxen/docs/TASKS.md`, and add it to the landmines section above.
+- A `Stop` hook in `.claude/settings.json` reminds you of the above when a session
+  touched source.
