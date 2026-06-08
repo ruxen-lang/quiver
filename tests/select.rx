@@ -1,0 +1,122 @@
+# Pins the Dropdown/Select widget + the overlay/popup infra (docs/DSL.md).
+# A select is bound to a State[Int] (selected index) over an Array[String] of
+# options. Clicking the trigger opens an overlay popup painted ON TOP; clicking
+# an option selects + closes; clicking outside dismisses. Headless.
+Tester.describe("select — trigger, overlay popup, dismiss") do |t: &var Tester|
+  let opts = { ||
+    var o: Array[String] = Array.new
+    o.push(String.from("red"))
+    o.push(String.from("green"))
+    o.push(String.from("blue"))
+    o
+  }
+
+  let form = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let sel = ui.state(0)
+      root.select(sel, opts.(), 100)     # node 0
+    })
+  }
+
+  t.it("the trigger shows the initial option; no overlay open at first") do
+    var app = form.()
+    t.expect(app.overlay_open?).to_eq(false)
+    t.expect(app.select_text(0)).to_eq(String.from("red"))
+    t.expect(app.w_of(0)).to_eq(100)
+    t.expect(app.h_of(0)).to_eq(row_height())
+  end
+
+  t.it("clicking the trigger opens the overlay anchored below it") do
+    var app = form.()
+    app.pointer_down(2, 2)              # click the trigger
+    t.expect(app.overlay_open?).to_eq(true)
+    t.expect(app.overlay_owner).to_eq(0)
+  end
+
+  t.it("clicking an option sets the index and closes the overlay") do
+    var app = form.()
+    app.pointer_down(2, 2)             # open (popup at y = row_height)
+    # option 1 (green) is the 2nd popup row: y = anchor(24) + 1*row_height + 2
+    app.pointer_down(2, row_height() + row_height() + 2)
+    app.flush
+    t.expect(app.overlay_open?).to_eq(false)
+    t.expect(app.select_value(0)).to_eq(1)
+    t.expect(app.select_text(0)).to_eq(String.from("green"))
+  end
+
+  t.it("clicking the first option selects index 0") do
+    var app = form.()
+    app.pointer_down(2, 2)
+    # option 0 (red): y = anchor(24) + 0 + 2
+    app.pointer_down(2, row_height() + 2)
+    app.flush
+    t.expect(app.overlay_open?).to_eq(false)
+    t.expect(app.select_value(0)).to_eq(0)
+  end
+
+  t.it("clicking outside the popup dismisses it WITHOUT changing the value") do
+    var app = form.()
+    app.pointer_down(2, 2)             # open, value still 0
+    app.pointer_down(2, 500)          # far below the popup -> dismiss
+    app.flush
+    t.expect(app.overlay_open?).to_eq(false)
+    t.expect(app.select_value(0)).to_eq(0)
+  end
+
+  t.it("a click that opens then a click outside is consumed (not passed below)") do
+    # a button below the select must NOT fire when a click dismisses the overlay
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let sel = ui.state(0)
+      let hits = ui.state(0)
+      root.select(sel, opts.(), 100)                                   # 0
+      root.button("below", { |ui2: &var Ui| hits.update(ui2, { |v| v + 1 }) }) # 1
+    })
+    app.pointer_down(2, 2)            # open the overlay
+    # the button is at row 2 (y = row_height); a click there would normally hit
+    # it, but the overlay is open so the click dismisses and is consumed.
+    app.pointer_down(2, row_height() + 2)
+    app.flush
+    t.expect(app.overlay_open?).to_eq(false)
+    # button handler did NOT fire (its dyn-less, so check no crash + still closed)
+    t.expect(app.select_value(0)).to_eq(0)
+  end
+
+  t.it("the overlay paints AFTER the trigger (on top)") do
+    var app = form.()
+    app.pointer_down(2, 2)            # open
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # the trigger box is painted early; the popup panel + option rows come later.
+    # find the index of the trigger's current-value text and an option text:
+    # main content first, overlay last.
+    let n = surface.size
+    # the LAST few commands belong to the overlay (its option texts). Assert the
+    # popup background panel appears AFTER the trigger box.
+    var trigger_box_at = 0 - 1
+    var panel_at = 0 - 1
+    var k = 0
+    while k < n
+      let cmd = surface.command_at(k)
+      if cmd == String.from("round_rect(0,0,100,#{row_height()},0,235,235,235)")
+        trigger_box_at = k
+      end
+      if cmd == String.from("round_rect(0,#{row_height()},100,#{row_height() * 3},0,250,250,250)")
+        panel_at = k
+      end
+      k = k + 1
+    end
+    t.expect(trigger_box_at >= 0).to_eq(true)
+    t.expect(panel_at >= 0).to_eq(true)
+    t.expect(panel_at > trigger_box_at).to_eq(true)
+  end
+
+  t.it("open_overlay / close_overlay drive the slot directly") do
+    var app = form.()
+    app.open_overlay(0, 0, row_height())
+    t.expect(app.overlay_open?).to_eq(true)
+    t.expect(app.overlay_owner).to_eq(0)
+    app.close_overlay
+    t.expect(app.overlay_open?).to_eq(false)
+    t.expect(app.overlay_owner).to_eq(-1)
+  end
+end

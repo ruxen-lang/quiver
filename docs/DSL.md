@@ -332,6 +332,57 @@ node-id→index hash) alongside per-slider `min`/`max`/`width`. Pinned by
 `tests/slider.rx`. Vertical, range (two-thumb), and float sliders are deferred
 (additive).
 
+### Overlay / popup primitive
+
+`App` has a single **overlay slot** — a node rendered above all normal content
+that captures interaction. It is the reusable basis for dropdowns, context
+menus, tooltips, and modals.
+
+| Call | Effect |
+|---|---|
+| `open_overlay(owner, x, y)` | open the overlay owned by `owner`, anchored at screen `(x, y)` |
+| `close_overlay` | close it |
+| `overlay_open?` | whether one is open |
+
+`overlay_owner` is the open overlay's owning node (-1 = none); `overlay_x` /
+`overlay_y` its anchor. Two rules make it behave like a real popup:
+
+- **Paint on top.** `paint_all` paints the main tree first, then — if open — the
+  overlay LAST, so it sits above everything.
+- **Hit-test first + click-outside-dismiss.** While an overlay is open,
+  `pointer_down` routes to the overlay *before* the normal tree: a click inside
+  the popup acts on it, a click **outside dismisses the overlay and is
+  consumed** (it does NOT fall through to the content below).
+
+One overlay at a time this round (no nested overlays).
+
+### Dropdown / `Select`
+
+`select` is a dropdown bound to a reactive `State[Int]` (the selected index)
+over an `Array[String]` of options:
+
+```ruxen
+let choice = ui.state(0)
+root.select(choice, options, 160)     # 160px trigger
+```
+
+- The **trigger** is a button-like box showing the current option + a ▾ arrow.
+  Its compute reads the index, so the trigger reflects the selection reactively;
+  `app.select_value(id)` / `app.select_text(id)` read the index / current option.
+- **Clicking the trigger** opens the overlay popup anchored just below it (a
+  panel + one row per option, the selected row highlighted).
+- **Clicking an option** writes the index with a single-lock `state.set(ui, k)`
+  (the index comes from the click row geometry — no state read, so no peek+set)
+  and closes the overlay; the trigger then shows the new option.
+- **Clicking outside** closes the overlay without changing the value.
+
+Options are stored in a flat per-`Col` string pool (one array for all selects, a
+per-select `(start, count)` slice); the selected index reuses the int pool.
+Paint reuses existing ops (`fill_round_rect`/`fill_rect`/`draw_text`) — no new
+op. Pinned by `tests/select.rx` (including a paint-order assertion that the popup
+panel is recorded after the trigger box). Multi-select, typeahead, nested
+overlays, and a scrollable popup (for very long option lists) are deferred.
+
 ## Why it must stay pinned with tests
 
 The static-vs-reactive boundary is the single rule users rely on for

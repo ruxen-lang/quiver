@@ -7,6 +7,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Overlay/popup infra.** `App` gained a single open-overlay slot
+  (`overlay_owner` + anchor `overlay_x`/`overlay_y`, -1 = none) with
+  `open_overlay(id, x, y)` / `close_overlay` / `overlay_open?`. The overlay
+  paints **last** (`paint_all` paints it after the main tree, so it sits on top)
+  and is hit-tested **first**: when open, a `pointer_down` inside the popup picks
+  an option, a click **outside dismisses it and is consumed** (not passed to the
+  content below). Reusable framework primitive for dropdowns/menus/tooltips/
+  modals.
+- **Dropdown/`Select` widget.** `Col.select(state, options, width)` binds to a
+  reactive `State[Int]` (selected index) over an `Array[String]` of options
+  (`let choice = ui.state(0); root.select(choice, options, 160)`). The trigger is
+  a box showing the current option + a ▾ arrow (reactive — its compute reads the
+  index). Clicking the trigger opens the overlay popup anchored below it; clicking
+  option k writes the index via a single-lock `state.set` and closes; clicking
+  outside closes without change. Paint: trigger (box + text + arrow), then the
+  popup panel + option rows (selected highlighted) on top — no new display-list
+  op. Options stored in a flat per-`Col` string pool; the index reuses the int
+  pool. Pinned by `tests/select.rx` (8 tests, incl. paint-order). Suite:
+  **107 passed**; the two `app.rx`/`counter.rx` pins stayed green and untouched.
 - **Drag-capture event infra.** `App` gained `pointer_move(x, y)` /
   `pointer_up(x, y)` dispatch and a `captured` node id (like `focused` for
   inputs). `pointer_down` on a draggable widget sets capture; subsequent

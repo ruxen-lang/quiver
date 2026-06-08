@@ -143,6 +143,15 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       hit-tests through list scroll. Paint reuses `op_round_rect` (track + filled
       portion + thumb). Pinned by `tests/slider.rx`. (Vertical/range/float sliders
       deferred — additive.)
+- [x] Dropdown/Select — `Col.select(state, options, width)` bound to a reactive
+      `State[Int]` (selected index) over an `Array[String]`. Built on new
+      **overlay/popup infra** on `App` (`open_overlay`/`close_overlay`/
+      `overlay_open?` + an anchored slot) — a reusable framework primitive
+      (dropdowns/menus/tooltips/modals): the overlay paints LAST (on top) and is
+      hit-tested FIRST, so a click outside dismisses it and is consumed. Trigger
+      reflects the selection; option-click writes the index (single-lock `set`)
+      and closes. No new paint op. Pinned by `tests/select.rx`. (Multi-select,
+      typeahead, nested overlays, scrollable popup deferred — additive.)
 - [x] Styling — **padding, background, border** (v1) on `row`/`col` via a small
       `Style` value (`row_styled`/`col_styled`): padding insets children and
       grows the box; background (`fill_round_rect`) + border (`stroke_round_rect`)

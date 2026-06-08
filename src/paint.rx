@@ -268,6 +268,10 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
     paint_slider(app, surface, i)
     return
   end
+  if app.root.select_at(i)
+    paint_select(app, surface, i)
+    return
+  end
   let x = app.x_of(i)
   let y = app.y_of(i)
   if app.root.kind_at(i) == kind_button()
@@ -275,6 +279,19 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   end
   let label = app.text_of(i)
   surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
+end
+
+## Paint a select TRIGGER: a box, the current option's text, and a ▾ arrow at
+## the right. (The popup, if open, is painted later by `paint_overlay`, on top.)
+def paint_select[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  let x = app.x_of(i)
+  let y = app.y_of(i)
+  let w = app.w_of(i)
+  surface.fill_round_rect(x, y, w, app.h_of(i), 0, 235, 235, 235)
+  let label = app.select_text(i)
+  surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
+  let arrow = String.from("v")
+  surface.draw_text(&arrow, x + w - char_width() - pad_x(), y + baseline_drop(), 20, 20, 20)
 end
 
 ## Paint a horizontal slider: a track bar, a filled portion from the track's
@@ -355,6 +372,33 @@ def paint_all[S: PaintSurface](app: &App, surface: &var S) -> nil
   while node >= 0
     paint_tree(app, surface, node)
     node = app.root.next_sibling_of(node)
+  end
+  # The overlay paints LAST so it sits on top of all normal content.
+  if app.overlay_open?
+    paint_overlay(app, surface)
+  end
+end
+
+## Paint the open overlay (a select popup) on top of everything: a panel behind
+## the option rows, then each option (the selected row highlighted). Anchored at
+## (overlay_x, overlay_y); each row is `row_height` tall, `select_width` wide.
+def paint_overlay[S: PaintSurface](app: &App, surface: &var S) -> nil
+  let owner = app.overlay_owner
+  let ax = app.overlay_x
+  let ay = app.overlay_y
+  let w = app.root.select_width_at(owner)
+  let count = app.root.option_count_at(owner)
+  let selected = app.select_value(owner)
+  surface.fill_round_rect(ax, ay, w, count * row_height(), 0, 250, 250, 250)
+  var k = 0
+  while k < count
+    let ry = ay + k * row_height()
+    if k == selected
+      surface.fill_rect(ax, ry, w, row_height(), 215, 225, 245)
+    end
+    let opt = app.root.option_at(owner, k)
+    surface.draw_text(&opt, ax + pad_x(), ry + baseline_drop(), 20, 20, 20)
+    k = k + 1
   end
 end
 

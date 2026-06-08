@@ -58,6 +58,13 @@ class App
   ## `pointer_down` sets it; `pointer_move` drives THAT node regardless of where
   ## the pointer is; `pointer_up` clears it. Reusable drag infra.
   captured: Int
+  ## Active overlay/popup: the node that owns the open overlay (-1 = none) and
+  ## its anchor in screen space. One overlay at a time this round. When open, it
+  ## paints LAST (on top) and is hit-tested FIRST (a click outside dismisses it,
+  ## consumed). The reusable primitive behind dropdowns/menus/tooltips.
+  overlay_owner: Int
+  overlay_x: Int
+  overlay_y: Int
 
   def init
     self.ui = Ui.new
@@ -73,6 +80,9 @@ class App
     self.focused = -1
     self.caret = Hash.new
     self.captured = -1
+    self.overlay_owner = -1
+    self.overlay_x = 0
+    self.overlay_y = 0
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -190,6 +200,8 @@ class App
         self.root.push_iw(self.checkbox_w(i))
       elsif self.root.slider_at(i)
         self.root.push_iw(self.root.slider_width_at(i))
+      elsif self.root.select_at(i)
+        self.root.push_iw(self.root.select_width_at(i))
       else
         self.root.push_iw(self.leaf_w(i))
       end
@@ -408,7 +420,7 @@ class App
   def hit_tree(i: Int, x: Int, y: Int, ox: Int, oy: Int) -> Int
     let px = x + ox
     let py = y + oy
-    if self.root.handler_at(i) >= 0 || self.root.input_at(i) || self.root.slider_at(i)
+    if self.root.handler_at(i) >= 0 || self.root.input_at(i) || self.root.slider_at(i) || self.root.select_at(i)
       if self.contains(i, px, py)
         return i
       end
@@ -436,9 +448,16 @@ class App
     -1
   end
 
-  ## A pointer-down event from the engine: hit-test; focus an input, capture +
-  ## set a slider, or run a button/checkbox handler. Returns the hit node, or -1.
+  ## A pointer-down event from the engine. When an overlay is open it is
+  ## hit-tested FIRST (it is on top): a click inside picks an option, a click
+  ## outside DISMISSES it and is consumed (not passed to the content below).
+  ## Otherwise: hit-test the tree; focus an input, open a select's overlay,
+  ## capture + set a slider, or run a button/checkbox handler. Returns the hit
+  ## node id (or -1; the select owner when an overlay click is consumed).
   def var pointer_down(x: Int, y: Int) -> Int
+    if self.overlay_owner >= 0
+      return self.handle_overlay_click(x, y)
+    end
     let i = self.hit_test(x, y)
     if i >= 0
       if self.root.input_at(i)
@@ -446,11 +465,30 @@ class App
       elsif self.root.slider_at(i)
         self.captured = i
         self.set_slider_from_x(i, x)
+      elsif self.root.select_at(i)
+        self.open_overlay(i, self.x_of(i), self.y_of(i) + self.h_of(i))
       else
         self.click(i)
       end
     end
     i
+  end
+
+  ## Open the overlay owned by node `owner`, anchored at screen (x, y).
+  def var open_overlay(owner: Int, x: Int, y: Int) -> nil
+    self.overlay_owner = owner
+    self.overlay_x = x
+    self.overlay_y = y
+  end
+
+  ## Close any open overlay.
+  def var close_overlay -> nil
+    self.overlay_owner = -1
+  end
+
+  ## Whether an overlay is currently open.
+  def overlay_open? -> Bool
+    self.overlay_owner >= 0
   end
 
   ## A pointer-move event: if a node is captured (a slider drag in progress),
@@ -498,6 +536,23 @@ class App
       Some(s) -> s.peek
       nil     -> 0
     end
+  end
+
+  ## Current selected index of select `i` (a lone `peek`), 0 when not a select.
+  def select_value(i: Int) -> Int
+    let idx = self.root.int_index_at(i)
+    if idx < 0
+      return 0
+    end
+    match self.root.ints.get(idx)
+      Some(s) -> s.peek
+      nil     -> 0
+    end
+  end
+
+  ## Current option string shown by select `i` (its selected option).
+  def select_text(i: Int) -> String
+    self.root.option_at(i, self.select_value(i))
   end
 
   ## The focused input's node id, or -1 when nothing is focused.
@@ -642,6 +697,53 @@ class App
   ## Write slider `i`'s value through a single `State.set` (one lock; the value
   ## was computed without reading the state, so there is no peek+set pair).
   def var write_slider(i: Int, v: Int) -> nil
+    let idx = self.root.int_index_at(i)
+    if idx < 0
+      return
+    end
+    match self.root.ints.get(idx)
+      Some(s) -> s.set(&var self.ui, v)
+      nil     -> nil
+    end
+  end
+
+  ## Handle a click while an overlay is open (a select popup): a click on option
+  ## row `k` selects it and closes; a click outside the popup just closes. Either
+  ## way the overlay is dismissed and the click is consumed. Returns the owner.
+  def var handle_overlay_click(x: Int, y: Int) -> Int
+    let owner = self.overlay_owner
+    let k = self.overlay_option_at(x, y)
+    if k >= 0
+      self.write_select(owner, k)
+    end
+    self.close_overlay
+    owner
+  end
+
+  ## Which popup option row (x, y) lands on, or -1 if outside the popup. The
+  ## popup is `select_width` wide, `option_count` rows of `row_height`, anchored
+  ## at (overlay_x, overlay_y).
+  def overlay_option_at(x: Int, y: Int) -> Int
+    let owner = self.overlay_owner
+    let w = self.root.select_width_at(owner)
+    let count = self.root.option_count_at(owner)
+    if x < self.overlay_x || x >= self.overlay_x + w
+      return -1
+    end
+    let rel = y - self.overlay_y
+    if rel < 0
+      return -1
+    end
+    let k = rel / row_height()
+    if k >= count
+      return -1
+    end
+    k
+  end
+
+  ## Write select `i`'s selected index through a single `State.set` (one lock;
+  ## the index came from geometry, not a state read — no peek+set pair).
+  def var write_select(i: Int, v: Int) -> nil
     let idx = self.root.int_index_at(i)
     if idx < 0
       return

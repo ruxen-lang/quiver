@@ -50,6 +50,11 @@ def kind_checkbox -> Int { 8 }
 ## `[min, max]`. Its compute reads the value (so the thumb re-renders); `App`
 ## drives click-to-set and drag (via pointer capture). See docs/DSL.md.
 def kind_slider -> Int { 9 }
+## A `Select` (dropdown): a clickable trigger bound to a reactive `State[Int]`
+## (selected index) over a list of option strings. Its compute reads the index
+## (so the trigger reflects the selection); clicking it opens an `App` overlay
+## popup of the options. See docs/DSL.md.
+def kind_select -> Int { 10 }
 
 ## Container style: padding, background fill, border, corner radius.
 ##
@@ -192,6 +197,14 @@ class Col
   slider_min_of: Hash[Int, Int]
   slider_max_of: Hash[Int, Int]
   slider_width_of: Hash[Int, Int]
+  ## Select option pool: every select's option strings flattened into one array,
+  ## with `option_start_of` / `option_count_of` slicing each select's range and
+  ## `select_width_of` the trigger box width. (A select also reuses the `ints`
+  ## pool above for its selected-index `State[Int]`.)
+  option_strings: Array[String]
+  option_start_of: Hash[Int, Int]
+  option_count_of: Hash[Int, Int]
+  select_width_of: Hash[Int, Int]
 
   def init
     self.kinds = Array.new
@@ -228,6 +241,10 @@ class Col
     self.slider_min_of = Hash.new
     self.slider_max_of = Hash.new
     self.slider_width_of = Hash.new
+    self.option_strings = Array.new
+    self.option_start_of = Hash.new
+    self.option_count_of = Hash.new
+    self.select_width_of = Hash.new
   end
 
   ## Reset the intrinsic-width buffer (called at the top of each layout pass).
@@ -356,6 +373,37 @@ class Col
     self.link(id)
   end
 
+  ## A dropdown/select bound to a reactive `State[Int]` (selected index) over a
+  ## list of option strings, with a fixed trigger width. Its compute reads the
+  ## index so the trigger reflects the selection; `App` opens an overlay popup of
+  ## the options on click and writes the index on choose (single-lock `set`):
+  ##
+  ##   let choice = ui.state(0)
+  ##   root.select(choice, options, 160)
+  def var select(state: State[Int], options: Array[String], width: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_select())
+    self.labels.push(String.from(""))
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| "#{state.get(ui2)}" })
+    self.handler_of.push(-1)
+    self.int_of.insert(id, self.ints.size as Int)
+    self.ints.push(state)
+    self.option_start_of.insert(id, self.option_strings.size as Int)
+    self.option_count_of.insert(id, options.size as Int)
+    var k = 0
+    let n = options.size as Int
+    while k < n
+      match options.get(k)
+        Some(s) -> self.option_strings.push(s.clone)
+        nil     -> self.option_strings.push(String.from(""))
+      end
+      k = k + 1
+    end
+    self.select_width_of.insert(id, width)
+    self.link(id)
+  end
+
   ## A horizontal container: the nodes built inside `build` become its
   ## children and are stacked along the X axis by the layout pass.
   def var row(build: any Fn[Fn(&var Col) -> nil]) -> nil
@@ -475,6 +523,45 @@ class Col
     match self.slider_width_of.get(i)
       Some(v) -> *v
       nil     -> 0
+    end
+  end
+
+  ## True when node `i` is a select (dropdown).
+  def select_at(i: Int) -> Bool
+    self.kind_at(i) == kind_select()
+  end
+
+  ## Trigger box width of select `i`, or 0.
+  def select_width_at(i: Int) -> Int
+    match self.select_width_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  ## Number of options of select `i`, or 0.
+  def option_count_at(i: Int) -> Int
+    match self.option_count_of.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  ## The `k`-th option string of select `i` ("" if out of range).
+  def option_at(i: Int, k: Int) -> String
+    let start = match self.option_start_of.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+    if start < 0
+      return String.from("")
+    end
+    if k < 0 || k >= self.option_count_at(i)
+      return String.from("")
+    end
+    match self.option_strings.get(start + k)
+      Some(s) -> s.clone
+      nil     -> String.from("")
     end
   end
 
