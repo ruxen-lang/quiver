@@ -169,11 +169,12 @@ root.list(96, { |c: &var Col|     # 96px viewport
   `pop_state` — display-list ops `op_save` / `op_clip` / `op_translate` /
   `op_restore`, replayed onto canvas `save` / `clip_rect` / `translate` /
   `restore`. Off-viewport children still record, but the clip masks them.
-- **Scroll input.** Canvas's `Event` enum has no wheel/scroll variant
-  (PointerMove/Down/Up, KeyDown, Resize, CloseRequested), so a windowed shell
-  drives scrolling by **drag** (pointer down then move adjusts the offset via
-  `scroll_by`); the programmatic `scroll_to`/`scroll_by` are the headless-testable
-  surface and what the drag handler calls.
+- **Scroll input.** A windowed shell forwards canvas's `Event.Scroll(dx, dy)`
+  (mouse wheel) to `app.scroll(dx, dy)`, which routes the wheel to the innermost
+  scrollable list under the last hovered point (`pointer_move` records the
+  hover) and `scroll_by`s it one row per click — `+dy` (wheel up/away) scrolls
+  content toward the top (decreases the offset). The programmatic
+  `scroll_to`/`scroll_by` remain the direct, headless-testable surface.
 - **Hit-testing is scroll/clip-aware.** `hit_test`/`pointer_down` mirror the
   paint walk: a recursive descent carrying an accumulated content offset.
   Entering a list adds its scroll offset (a screen point maps to that level's
@@ -208,24 +209,22 @@ read it.
   `app.pointer_down(x, y)` over an input sets focus to it (and `hit_test` now
   matches inputs as well as button handlers). `app.focused_node` reads it. Only
   the focused input consumes key input.
-- **Key handling.** `app.key_down(code)` (alias `type_char(code)` / `key(code)`,
-  the headless edit entry points) routes to the focused input:
+- **Typing.** `app.text_input(cp)` (alias `type_char(cp)`) inserts the Unicode
+  codepoint `cp` at the focused input's caret (single-lock RMW) and advances it.
+  This is the ONLY path that adds text — see "Windowed event contract" below.
+- **Editing / caret.** `app.key_down(code)` (alias `key(code)`) routes a CONTROL
+  key to the focused input:
 
   | `code` | Effect |
   |---|---|
-  | `32`–`126` (printable ASCII) | insert that char at the caret, caret++ |
-  | `key_backspace` (`8`) | delete the char before the caret, caret-- |
+  | `key_backspace` | delete the char before the caret, caret-- |
+  | `key_delete` | delete the char at the caret (caret stays) |
   | `key_left` / `key_right` | move the caret (clamped to `[0, len]`) |
+  | `key_home` / `key_end` | caret to start / end |
 
+  `key_down` no longer inserts printable characters (that's `text_input`).
   Editing mutates the value `State` → `flush` → repaints just the input;
   `app.caret_of(input_id)` reads the caret index.
-- **What `KeyDown` carries.** `canvas`'s `Event.KeyDown(Int)` is an **opaque
-  platform keycode** — no char, no modifiers. By SDL convention printable ASCII
-  keys equal their ASCII code (so quiver treats `32`–`126` as the char), but
-  arrow/edit keys are platform-specific, so quiver defines its OWN logical codes
-  (`key_backspace`/`key_left`/`key_right`) and a windowed shell maps the SDL
-  keycode onto them (the example binary's `map_platform_key`). quiver stays
-  platform-agnostic.
 - **Caret + paint.** `App` keeps a per-input `caret` index. Paint draws a field
   box (`fill_round_rect`), the text, and — only when focused — a thin caret
   `fill_rect` at `x + pad_x + caret * char_width` (the char-metric estimate
@@ -413,8 +412,30 @@ The patterns it teaches:
   frame on the same mutex corrupt the value). The widgets do this for you.
 - **The shell stays in the binary.** The window + event loop + paint `replay`
   (the canvas-facing glue) live in the example's `main.rx`; quiver itself is
-  platform-free. Forward `PointerDown/Move/Up` + `KeyDown` into `App`'s
-  dispatch; flush + repaint only when the dirty set is non-empty.
+  platform-free. Forward canvas events into `App`'s dispatch (see below); flush
+  + repaint only when the dirty set is non-empty.
+
+### Windowed event contract
+
+A windowed shell forwards each `canvas` `Event` to the matching `App` method —
+quiver consumes the events, the shell never interprets them:
+
+| `canvas` event | `App` call | what it does |
+|---|---|---|
+| `PointerDown(x, y)` | `pointer_down(x, y)` | hit-test → focus / click / open / capture |
+| `PointerMove(x, y)` | `pointer_move(x, y)` | record hover + drive a captured drag |
+| `PointerUp(x, y)` | `pointer_up(x, y)` | release the drag capture |
+| `TextInput(cp)` | `text_input(cp)` | **insert** the Unicode codepoint at the caret |
+| `KeyDown(k)` | `key_down(k)` | **control only** — backspace/delete edit, arrows/home/end move the caret |
+| `Scroll(dx, dy)` | `scroll(dx, dy)` | wheel → scroll the innermost hovered list |
+| `Resize(w, h)` | `resize(w, h)` | record design size + re-arrange |
+| `CloseRequested` | (quit the loop) | |
+
+The split that matters: **`TextInput` is the only path that adds text** (it
+carries the OS-composed, shift/layout-correct codepoint — `'A'`=65, `'é'`=233),
+and **`KeyDown` is control-only** (real platform keycodes for Backspace/Delete/
+arrows/Home/End, passed straight through — no remapping). Keep a `_ -> nil`
+catch-all so new event variants don't break the match.
 
 ### Reactivity model: content + (opt-in) structure
 

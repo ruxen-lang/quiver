@@ -7,6 +7,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Windowed event consumption — text input, scroll, resize.** quiver now
+  consumes canvas's full event set:
+  - `App.text_input(cp)` inserts a Unicode codepoint at the focused input's
+    caret (single-lock RMW) — the ONLY text-adding path, fed by
+    `Event.TextInput`.
+  - `App.key_down` is now **control-only** (fed by `Event.KeyDown`): backspace
+    (`key_backspace`), forward delete (`key_delete`), caret move
+    (`key_left`/`key_right`/`key_home`/`key_end`). The control key constants are
+    canvas's real platform keycodes, passed straight through (no remapping;
+    `map_platform_key` removed from the examples). Printable insertion was
+    removed from `key_down`.
+  - `App.scroll(dx, dy)` routes a wheel event (fed by `Event.Scroll`) to the
+    innermost scrollable list under the last hovered point (`pointer_move` now
+    records the hover); `+dy` scrolls content toward the top, one row per click;
+    a no-op when nothing scrollable is hovered.
+  - `App.resize(w, h)` records the design size and re-arranges (fed by
+    `Event.Resize`); `design_width`/`design_height` expose it.
+  All three examples (counter, settings, todo) route the new events
+  (`TextInput`/`KeyDown`/`Scroll`/`Resize` → the matching `App` call, with a
+  `_ -> nil` catch-all) and **build against the current canvas**. Pinned by
+  `tests/window_events.rx` (10 tests). Suite: **124 passed**; the
+  `app.rx`/`counter.rx` pins stayed green and untouched.
 - **Structural reactivity — dynamic lists (`list_of`).** The first opt-in
   construct that grows/shrinks the tree in response to state, without breaking
   the build-once rule for everything else. `Col.list_of(model, viewport_h,
@@ -180,6 +202,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `app.rx`/`counter.rx` pins stayed green and untouched).
 
 ### Changed
+- **`Event.KeyDown` no longer inserts characters** (control-only); typing now
+  arrives via `Event.TextInput` → `App.text_input`. The `App` `key_*` constants
+  are canvas's real control keycodes (Backspace 8, Delete 127, arrows / Home /
+  End), and the examples' `map_platform_key` shim was removed.
 - Dropped the defensive empty-hash `size as Int > 0` / `key?` guards from the
   arena and geometry accessors (`Col.first_child_of`/`next_sibling_of`/
   `parent_of`/`append_child`, `App.x_of`/`y_of`/`w_of`/`h_of`/`text_of`): ruxen

@@ -20,16 +20,16 @@ def check_box_size -> Int { 16 }
 def slider_thumb -> Int { 12 }
 def slider_track_h -> Int { 6 }
 
-## Logical key codes for `App.key_down`. Printable input is the character's
-## ASCII code (32-126, which is also the SDL keycode for those keys), so a key
-## in that range inserts that char. The named edit keys are quiver's OWN logical
-## codes — a windowed shell maps the platform keycode (canvas `Event.KeyDown`
-## carries an opaque keycode, no char/modifiers) onto these. `key_backspace` is
-## ASCII/SDL BS (8); the arrows use negative codes so they never collide with a
-## printable char or a real positive platform keycode.
+## Control key codes for `App.key_down`. canvas's `Event.KeyDown` is CONTROL-ONLY
+## (no characters — those arrive as `text_input`), and these are the actual
+## platform keycodes it delivers, so the windowed shell passes them straight
+## through (no remapping needed). Printable text never comes through `key_down`.
 def key_backspace -> Int { 8 }
-def key_left -> Int { -1 }
-def key_right -> Int { -2 }
+def key_delete -> Int { 127 }
+def key_left -> Int { 1073741904 }
+def key_right -> Int { 1073741903 }
+def key_home -> Int { 1073741898 }
+def key_end -> Int { 1073741901 }
 
 class App
   ui: Ui
@@ -65,6 +65,18 @@ class App
   overlay_owner: Int
   overlay_x: Int
   overlay_y: Int
+  ## Last pointer position (updated by `pointer_move`) — `scroll` routes a wheel
+  ## event to the innermost scrollable list under this point.
+  hover_x: Int
+  hover_y: Int
+  ## Whether the pointer has been seen yet (so a scroll before any move is a
+  ## no-op rather than routing to (0,0)).
+  hovered: Bool
+  ## Current design (logical) size, updated by `resize`. Layout is top-anchored
+  ## for the slice, so width isn't used for wrapping yet, but the size is tracked
+  ## for width-aware layout + correct viewport math as it grows.
+  design_w: Int
+  design_h: Int
 
   def init
     self.ui = Ui.new
@@ -83,6 +95,11 @@ class App
     self.overlay_owner = -1
     self.overlay_x = 0
     self.overlay_y = 0
+    self.hover_x = 0
+    self.hover_y = 0
+    self.hovered = false
+    self.design_w = 0
+    self.design_h = 0
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -480,6 +497,51 @@ class App
     -1
   end
 
+  ## The INNERMOST scrollable list whose viewport contains screen point (x, y),
+  ## or -1. Walks the tree like `hit_tree` (accumulating each list's scroll
+  ## offset, clipping to its viewport box), and tracks the deepest list hit so a
+  ## wheel routes to the list directly under the pointer — including a list
+  ## nested inside another.
+  def list_under(x: Int, y: Int) -> Int
+    var best = -1
+    var node = self.root.root_head
+    while node >= 0
+      let h = self.list_under_tree(node, x, y, 0, 0, best)
+      if h >= 0
+        best = h
+      end
+      node = self.root.next_sibling_of(node)
+    end
+    best
+  end
+
+  ## Recursive helper: returns the deepest list containing the point in the
+  ## subtree at `i`, or the incoming `best`. `(ox, oy)` is the accumulated
+  ## content offset.
+  def list_under_tree(i: Int, x: Int, y: Int, ox: Int, oy: Int, best: Int) -> Int
+    let px = x + ox
+    let py = y + oy
+    if !self.root.container_at(i)
+      return best
+    end
+    var coy = oy
+    var deepest = best
+    if self.root.list_at(i)
+      if !self.contains(i, px, py)
+        return best
+      end
+      # this list contains the point; it's deeper than any ancestor list found.
+      deepest = i
+      coy = oy + self.scroll_of(i)
+    end
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      deepest = self.list_under_tree(c, x, y, ox, coy, deepest)
+      c = self.root.next_sibling_of(c)
+    end
+    deepest
+  end
+
   ## A pointer-down event from the engine. When an overlay is open it is
   ## hit-tested FIRST (it is on top): a click inside picks an option, a click
   ## outside DISMISSES it and is consumed (not passed to the content below).
@@ -523,10 +585,14 @@ class App
     self.overlay_owner >= 0
   end
 
-  ## A pointer-move event: if a node is captured (a slider drag in progress),
-  ## drive it from the pointer x regardless of where the pointer is. Returns the
-  ## captured node, or -1.
+  ## A pointer-move event: record the hover position (so a later `scroll` routes
+  ## to the list under the pointer), then — if a node is captured (a slider drag
+  ## in progress) — drive it from the pointer x regardless of where the pointer
+  ## is. Returns the captured node, or -1.
   def var pointer_move(x: Int, y: Int) -> Int
+    self.hover_x = x
+    self.hover_y = y
+    self.hovered = true
     if self.captured < 0
       return -1
     end
@@ -621,10 +687,10 @@ class App
     end
   end
 
-  ## A key-down event: route to the focused input. Printable ASCII (32-126)
-  ## inserts that char at the caret; `key_backspace` deletes the char before
-  ## the caret; `key_left`/`key_right` move the caret. No-op when nothing is
-  ## focused. After an edit / caret move the input is dirtied for repaint.
+  ## A CONTROL key-down event: route to the focused input for EDITING and CARET
+  ## navigation only — printable characters arrive via `text_input`, not here
+  ## (canvas's `Event.KeyDown` is control-only). Backspace/Delete edit;
+  ## Left/Right/Home/End move the caret. No-op when nothing is focused.
   def var key_down(code: Int) -> nil
     let i = self.focused
     if i < 0
@@ -633,25 +699,77 @@ class App
     if !self.root.input_at(i)
       return
     end
-    if code >= 32 && code <= 126
-      self.insert_char(i, code)
-    elsif code == key_backspace()
+    if code == key_backspace()
       self.backspace(i)
+    elsif code == key_delete()
+      self.forward_delete(i)
     elsif code == key_left()
       self.move_caret(i, -1)
     elsif code == key_right()
       self.move_caret(i, 1)
+    elsif code == key_home()
+      self.caret_home(i)
+    elsif code == key_end()
+      self.caret_end(i)
     end
   end
 
-  ## Programmatic insert of one printable char (by code) into the focused input.
-  def var type_char(code: Int) -> nil
+  ## A text-input event: insert the Unicode codepoint `cp` at the focused
+  ## input's caret (single-lock RMW via `insert_char`). The ONLY path that adds
+  ## text. No-op when nothing focused. `type_char` is the alias headless tests
+  ## use.
+  def var text_input(cp: Int) -> nil
+    let i = self.focused
+    if i < 0
+      return
+    end
+    if !self.root.input_at(i)
+      return
+    end
+    self.insert_char(i, cp)
+  end
+
+  ## Programmatic insert of one codepoint into the focused input (alias of
+  ## `text_input`) — the headless typing entry point.
+  def var type_char(cp: Int) -> nil
+    self.text_input(cp)
+  end
+
+  ## Programmatic control key (alias of `key_down`) — the headless edit entry.
+  def var key(code: Int) -> nil
     self.key_down(code)
   end
 
-  ## Programmatic key (alias of `key_down`) — the headless edit entry point.
-  def var key(code: Int) -> nil
-    self.key_down(code)
+  ## A mouse-wheel event: scroll the innermost scrollable `list` under the last
+  ## hovered point by the wheel delta. `+dy` is wheel up/away → scroll content
+  ## UP (toward the top) → DECREASE the offset; `-dy` (wheel down) increases it.
+  ## One wheel click = one row step. No-op if nothing scrollable is hovered.
+  def var scroll(dx: Int, dy: Int) -> nil
+    if !self.hovered
+      return
+    end
+    let list = self.list_under(self.hover_x, self.hover_y)
+    if list < 0
+      return
+    end
+    self.scroll_by(list, 0 - dy * row_height())
+  end
+
+  ## A window-resize event: record the new design size and re-lay-out (the
+  ## caller repaints). canvas re-creates the GPU surface; quiver just re-arranges.
+  def var resize(w: Int, h: Int) -> nil
+    self.design_w = w
+    self.design_h = h
+    self.arrange
+  end
+
+  ## Current design (logical) width / height, as last set by `resize`.
+  def design_width -> Int
+    self.design_w
+  end
+
+  def design_height -> Int
+    self.design_h
   end
 
   private
@@ -882,6 +1000,39 @@ class App
       next = len
     end
     self.caret.insert(i, next)
+    self.ui.mark_dirty(i)
+  end
+
+  ## Delete the char AT input `i`'s caret (forward delete); caret stays put.
+  def var forward_delete(i: Int) -> nil
+    let caret = self.caret_of(i)
+    let len = self.input_value(i).size as Int
+    if caret >= len
+      return
+    end
+    self.edit_value(i, { |cur: String|
+      var out = String.from("")
+      var n = 0
+      for c in cur.chars
+        if n != caret
+          out = "#{out}#{c}"
+        end
+        n = n + 1
+      end
+      out
+    })
+    self.ui.mark_dirty(i)
+  end
+
+  ## Move input `i`'s caret to the start.
+  def var caret_home(i: Int) -> nil
+    self.caret.insert(i, 0)
+    self.ui.mark_dirty(i)
+  end
+
+  ## Move input `i`'s caret to the end.
+  def var caret_end(i: Int) -> nil
+    self.caret.insert(i, self.input_value(i).size as Int)
     self.ui.mark_dirty(i)
   end
 end

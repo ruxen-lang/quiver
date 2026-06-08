@@ -57,21 +57,6 @@ def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
   end
 end
 
-## Map a platform (SDL) keycode to quiver's logical key for `App.key_down`.
-## Printable ASCII (32-126) and backspace (8) are the SDL keycode already, so
-## they pass through; SDL's arrow keysyms are large platform-specific values
-## (SDLK_LEFT / SDLK_RIGHT) we translate to quiver's `key_left` / `key_right`.
-## (This is the L1->L2 key seam — quiver itself stays platform-agnostic.)
-def map_platform_key(code: Int) -> Int
-  if code == 1073741904
-    key_left()
-  elsif code == 1073741903
-    key_right()
-  else
-    code
-  end
-end
-
 ## Print the commands recorded since `from`, returning the new size.
 def narrate(surface: &RecordingSurface, from: Int) -> Int
   var i = from
@@ -145,12 +130,13 @@ def drive(win0: Window) -> nil
     match win.poll_event
       Some(ev) -> match ev
         Event.PointerDown(x, y) -> app.pointer_down(x, y)
-        Event.CloseRequested    -> running = false
         Event.PointerMove(x, y) -> app.pointer_move(x, y)
         Event.PointerUp(x, y)   -> app.pointer_up(x, y)
-        Event.KeyDown(k)        -> app.key_down(map_platform_key(k))
-        Event.Resize(ww, hh)    -> nil
-        Event.Scroll(dx, dy)    -> nil
+        Event.TextInput(cp)     -> app.text_input(cp)   # printable chars insert here
+        Event.KeyDown(k)        -> app.key_down(k)        # control-only: edit / caret
+        Event.Scroll(dx, dy)    -> app.scroll(dx, dy)
+        Event.Resize(ww, hh)    -> app.resize(ww, hh)
+        Event.CloseRequested    -> running = false
         _                       -> nil
       end
       nil -> nil

@@ -1,0 +1,124 @@
+# Pins the windowed-event contract (docs/DSL.md): TextInput inserts a codepoint
+# at the focused input's caret; KeyDown is control-only (backspace/delete edit,
+# arrows/home/end move the caret); Scroll routes to the innermost scrollable list
+# under the hover; Resize re-arranges to the new design size. Headless.
+Tester.describe("window events — text_input / key_down / scroll / resize") do |t: &var Tester|
+  let form = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let name = ui.state_str("")
+      root.text("name:")             # node 0
+      root.input(name, 120)          # node 1
+    })
+  }
+
+  let input_y = { || row_height() + 2 }
+
+  t.it("text_input inserts the codepoint at the caret; key_down does NOT") do
+    var app = form.()
+    app.pointer_down(4, input_y.())   # focus the input
+    app.text_input(104)               # 'h'
+    app.text_input(105)               # 'i'
+    app.flush
+    t.expect(app.text_of(1)).to_eq(String.from("hi"))
+    t.expect(app.caret_of(1)).to_eq(2)
+  end
+
+  t.it("a printable code through key_down no longer inserts (control-only)") do
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.key_down(120)                 # 'x' as a KEY — must be ignored now
+    app.flush
+    t.expect(app.text_of(1)).to_eq(String.from(""))
+    t.expect(app.caret_of(1)).to_eq(0)
+  end
+
+  t.it("text_input handles a non-ASCII codepoint (é = 233)") do
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.text_input(233)               # 'é'
+    app.flush
+    t.expect(app.text_of(1)).to_eq(String.from("é"))
+  end
+
+  t.it("key_down backspace deletes; left/right move the caret") do
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.text_input(97)                # a
+    app.text_input(98)                # b
+    app.text_input(99)                # c
+    app.flush
+    app.key_down(key_backspace())     # delete 'c'
+    app.flush
+    t.expect(app.text_of(1)).to_eq(String.from("ab"))
+    t.expect(app.caret_of(1)).to_eq(2)
+    app.key_down(key_left())          # caret 2 -> 1
+    t.expect(app.caret_of(1)).to_eq(1)
+    app.key_down(key_right())         # caret 1 -> 2
+    t.expect(app.caret_of(1)).to_eq(2)
+  end
+
+  t.it("text_input with nothing focused is a no-op") do
+    var app = form.()
+    app.text_input(120)               # nobody focused
+    app.flush
+    t.expect(app.text_of(1)).to_eq(String.from(""))
+  end
+
+  # --- scroll routing ---
+  let scroll_app = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      root.text("header")             # node 0 (not scrollable)
+      root.list(row_height() * 2, { |c: &var Col|
+        c.text("a")
+        c.text("b")
+        c.text("c")
+        c.text("d")                   # content 4 rows, viewport 2 → scrollable
+      })
+    })
+  }
+
+  t.it("scroll over a list scrolls it; direction: wheel-down scrolls content down") do
+    var app = scroll_app.()
+    let list = 1
+    # hover over the list, then a wheel-down (dy negative) scrolls content down
+    app.pointer_move(2, row_height() + 2)
+    t.expect(app.scroll_of(list)).to_eq(0)
+    app.scroll(0, 0 - 1)              # wheel down → increase offset by one row
+    t.expect(app.scroll_of(list)).to_eq(row_height())
+    app.scroll(0, 1)                  # wheel up → back toward the top
+    t.expect(app.scroll_of(list)).to_eq(0)
+  end
+
+  t.it("scroll clamps at the ends") do
+    var app = scroll_app.()
+    app.pointer_move(2, row_height() + 2)
+    app.scroll(0, 0 - 100)            # far down → clamp to max (content-viewport)
+    t.expect(app.scroll_of(1)).to_eq(row_height() * 2)
+    app.scroll(0, 100)               # far up → clamp to 0
+    t.expect(app.scroll_of(1)).to_eq(0)
+  end
+
+  t.it("scroll over a NON-list region does nothing") do
+    var app = scroll_app.()
+    app.pointer_move(2, 2)            # over the header (node 0), not the list
+    app.scroll(0, 0 - 1)
+    t.expect(app.scroll_of(1)).to_eq(0)
+  end
+
+  t.it("scroll with no prior hover is a no-op") do
+    var app = scroll_app.()
+    app.scroll(0, 0 - 1)             # never hovered
+    t.expect(app.scroll_of(1)).to_eq(0)
+  end
+
+  # --- resize ---
+  t.it("resize updates the design size and re-arranges without breaking layout") do
+    var app = form.()
+    app.resize(400, 300)
+    t.expect(app.design_width).to_eq(400)
+    t.expect(app.design_height).to_eq(300)
+    # geometry is still valid: the input is one row below the label
+    t.expect(app.y_of(1)).to_eq(row_height())
+    t.expect(app.h_of(1)).to_eq(row_height())
+  end
+end

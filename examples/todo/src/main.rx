@@ -104,9 +104,10 @@ def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface
         Event.PointerDown(x, y) -> app.pointer_down(x, y)
         Event.PointerMove(x, y) -> app.pointer_move(x, y)
         Event.PointerUp(x, y)   -> app.pointer_up(x, y)
-        Event.KeyDown(k)        -> app.key_down(map_platform_key(k))
-        Event.Resize(ww, hh)    -> nil
-        Event.Scroll(dx, dy)    -> nil
+        Event.TextInput(cp)     -> app.text_input(cp)   # printable chars insert here
+        Event.KeyDown(k)        -> app.key_down(k)        # control-only: edit / caret
+        Event.Scroll(dx, dy)    -> app.scroll(dx, dy)      # wheel → scroll the hovered list
+        Event.Resize(ww, hh)    -> app.resize(ww, hh)
         Event.CloseRequested    -> running = false
         _                       -> nil
       end
@@ -204,16 +205,6 @@ def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
       let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)
     end
     i = i + 1
-  end
-end
-
-def map_platform_key(code: Int) -> Int
-  if code == 1073741904
-    key_left()
-  elsif code == 1073741903
-    key_right()
-  else
-    code
   end
 end
 
