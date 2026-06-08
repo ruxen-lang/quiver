@@ -1,0 +1,112 @@
+# Pins the arena-nesting foundation: a node can own CHILDREN via flat
+# parallel child-id links + `-1` sentinels (never a recursive type, per the
+# ruxen v1 landmines). The flat-arena "ids ARE node ids" invariant holds:
+# every node still has a stable id = its build order index.
+Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
+  t.it("a flat column has roots with no parent and no children") do
+    var col = Col.new
+    col.text("a")
+    col.text("b")
+    # both are top-level roots
+    t.expect(col.parent_of(0)).to_eq(-1)
+    t.expect(col.parent_of(1)).to_eq(-1)
+    # leaves: no children
+    t.expect(col.first_child_of(0)).to_eq(-1)
+    t.expect(col.first_child_of(1)).to_eq(-1)
+    # root sibling chain threads 0 -> 1 -> end
+    t.expect(col.root_head).to_eq(0)
+    t.expect(col.next_sibling_of(0)).to_eq(1)
+    t.expect(col.next_sibling_of(1)).to_eq(-1)
+  end
+
+  t.it("row() builds a container node that owns the nodes built inside it") do
+    var col = Col.new
+    col.text("title")                                  # node 0 (root)
+    col.row({ |c: &var Col|                             # node 1 (root container)
+      c.text("left")                                    # node 2 (child of 1)
+      c.text("right")                                   # node 3 (child of 1)
+    })
+    t.expect(col.size).to_eq(4)
+    t.expect(col.kind_at(1)).to_eq(kind_row())
+    # the container is a root; its children point back to it
+    t.expect(col.parent_of(1)).to_eq(-1)
+    t.expect(col.parent_of(2)).to_eq(1)
+    t.expect(col.parent_of(3)).to_eq(1)
+    # child chain of the row: 2 -> 3 -> end
+    t.expect(col.first_child_of(1)).to_eq(2)
+    t.expect(col.next_sibling_of(2)).to_eq(3)
+    t.expect(col.next_sibling_of(3)).to_eq(-1)
+    # the title and the row are siblings at the top level
+    t.expect(col.root_head).to_eq(0)
+    t.expect(col.next_sibling_of(0)).to_eq(1)
+    t.expect(col.next_sibling_of(1)).to_eq(-1)
+  end
+
+  t.it("nesting is arbitrary: a col() inside a row() inside the root") do
+    var col = Col.new
+    col.row({ |c: &var Col|                # 0 row
+      c.text("x")                          # 1 child of 0
+      c.col({ |c2: &var Col|               # 2 col, child of 0
+        c.text("y")                        # 3 child of 2
+        c.text("z")                        # 4 child of 2
+      })
+    })
+    t.expect(col.size).to_eq(5)
+    t.expect(col.kind_at(0)).to_eq(kind_row())
+    t.expect(col.kind_at(2)).to_eq(kind_col())
+    # depth: 4's parent is 2, 2's parent is 0, 0 is a root
+    t.expect(col.parent_of(4)).to_eq(2)
+    t.expect(col.parent_of(2)).to_eq(0)
+    t.expect(col.parent_of(0)).to_eq(-1)
+    # row 0's children: x(1) then the col(2)
+    t.expect(col.first_child_of(0)).to_eq(1)
+    t.expect(col.next_sibling_of(1)).to_eq(2)
+    # col 2's children: y(3) then z(4)
+    t.expect(col.first_child_of(2)).to_eq(3)
+    t.expect(col.next_sibling_of(3)).to_eq(4)
+  end
+
+  t.it("out-of-range link accessors return -1, not panics") do
+    var col = Col.new
+    t.expect(col.parent_of(9)).to_eq(-1)
+    t.expect(col.first_child_of(9)).to_eq(-1)
+    t.expect(col.next_sibling_of(9)).to_eq(-1)
+  end
+
+  t.it("a dyn_text child records its compute slot and links like any node") do
+    var col = Col.new
+    col.text("title")                                   # node 0
+    col.row({ |c: &var Col|                              # node 1
+      c.dyn_text({ |ui2: &var Ui| String.from("x") })    # node 2 (child of 1)
+    })
+    # the dyn_text child is a normal arena node: kind, compute slot, links
+    t.expect(col.kind_at(2)).to_eq(kind_dyn_text())
+    t.expect(col.compute_at(2)).to_eq(0)                 # first compute slot
+    t.expect(col.parent_of(2)).to_eq(1)
+    t.expect(col.first_child_of(1)).to_eq(2)
+  end
+
+  # KNOWN ruxen LIMITATION (CLAUDE.md Q21): a closure that CAPTURES a value
+  # and is stored from inside a container build block (`row`/`col`, which
+  # invoke `build.(&var *self)`) has its captures corrupted — invoking the
+  # stored compute later reads garbage and segfaults for a captured class
+  # handle (e.g. a `State`). Static `text` children are unaffected (no
+  # capture), which is the first-slice content. Re-enable when ruxen fixes
+  # closure-capture under the self-reborrow.
+  t.xit("a reactive child subscribes through the Ui (blocked: ruxen Q21)") do
+    var ui = Ui.new
+    let count = ui.state(7)
+    var col = Col.new
+    col.row({ |c: &var Col|
+      c.dyn_text({ |ui2: &var Ui| "n: #{count.get(ui2)}" })
+    })
+    ui.current_scope = 1
+    let out = match col.computes.get(0)
+      Some(f) -> f.(&var ui)
+      nil     -> String.from("missing")
+    end
+    ui.current_scope = -1
+    t.expect(out).to_eq(String.from("n: 7"))
+    t.expect(ui.subs.size as Int).to_eq(1)
+  end
+end

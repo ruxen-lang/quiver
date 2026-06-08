@@ -1,0 +1,85 @@
+# Pins Row + the own-flex layout pass (docs/LAYOUT.md): a Row stacks its
+# children horizontally; a Col stacks vertically; nesting composes. The pass
+# walks the nested arena and produces absolute geometry for paint.
+Tester.describe("Row + own-flex layout pass") do |t: &var Tester|
+  # A title above a row of two texts.  "ab" = 2 chars, "cde" = 3 chars.
+  let titled_row = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      root.text("hi")                      # node 0 (root leaf)
+      root.row({ |c: &var Col|             # node 1 (root container)
+        c.text("ab")                       # node 2
+        c.text("cde")                      # node 3
+      })
+    })
+  }
+
+  let w_for = { |chars: Int| chars * char_width() + pad_x() * 2 }
+
+  t.it("row children are laid out horizontally, sharing one row's y") do
+    var app = titled_row.()
+    # title sits at the top
+    t.expect(app.y_of(0)).to_eq(0)
+    t.expect(app.x_of(0)).to_eq(0)
+    # the row's children share the row band (below the title)
+    t.expect(app.y_of(2)).to_eq(row_height())
+    t.expect(app.y_of(3)).to_eq(row_height())
+    # first child starts at x=0, second child is offset by the first's width
+    t.expect(app.x_of(2)).to_eq(0)
+    t.expect(app.x_of(3)).to_eq(w_for.(2))
+  end
+
+  t.it("each leaf is sized to its own text width") do
+    var app = titled_row.()
+    t.expect(app.w_of(0)).to_eq(w_for.(2))   # "hi"
+    t.expect(app.w_of(2)).to_eq(w_for.(2))   # "ab"
+    t.expect(app.w_of(3)).to_eq(w_for.(3))   # "cde"
+  end
+
+  t.it("the row container spans the sum of its children on the main axis") do
+    var app = titled_row.()
+    # row is node 1: width = ab + cde, height = one row
+    t.expect(app.w_of(1)).to_eq(w_for.(2) + w_for.(3))
+    t.expect(app.h_of(1)).to_eq(row_height())
+    t.expect(app.x_of(1)).to_eq(0)
+    t.expect(app.y_of(1)).to_eq(row_height())
+  end
+
+  t.it("a nested col inside a row stacks vertically within its column") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      root.row({ |c: &var Col|             # 0 row
+        c.text("L")                        # 1 leaf, left column
+        c.col({ |c2: &var Col|             # 2 col, right
+          c.text("hello")                  # 3
+          c.text("x")                      # 4
+        })
+      })
+    })
+    # left leaf at origin
+    t.expect(app.x_of(1)).to_eq(0)
+    t.expect(app.y_of(1)).to_eq(0)
+    # the nested col is offset right by L's width
+    t.expect(app.x_of(2)).to_eq(w_for.(1))
+    # inside the col, the two texts stack on y at the col's x
+    t.expect(app.x_of(3)).to_eq(w_for.(1))
+    t.expect(app.x_of(4)).to_eq(w_for.(1))
+    t.expect(app.y_of(3)).to_eq(0)
+    t.expect(app.y_of(4)).to_eq(row_height())
+    # the col's height is two rows; the row's height matches the tallest child
+    t.expect(app.h_of(2)).to_eq(row_height() * 2)
+    t.expect(app.h_of(0)).to_eq(row_height() * 2)
+  end
+
+  t.it("paint draws each leaf at its laid-out position; containers draw nothing") do
+    var app = titled_row.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + text(hi) + [row draws nothing] + text(ab) + text(cde)
+    t.expect(surface.size).to_eq(4)
+    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    t.expect(surface.command_at(1)).to_eq(String.from("text('hi',4,16)"))
+    # "ab" at x=0 of the row band (y = row_height) -> baseline (4, 24+16)
+    t.expect(surface.command_at(2)).to_eq(String.from("text('ab',4,40)"))
+    # "cde" offset right by ab's width (w_for(2)=24) -> x = 24+pad_x(4) = 28
+    t.expect(surface.command_at(3)).to_eq(String.from("text('cde',28,40)"))
+  end
+end

@@ -173,8 +173,13 @@ class RecordingSurface
   end
 end
 
-## Paint one node: buttons get a grey box behind their label.
+## Paint one node: buttons get a grey box behind their label. Containers
+## (Row/Col) draw nothing themselves — the layout pass positions their
+## children, which are painted as their own nodes in tree order.
 def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  if app.root.container_at(i)
+    return
+  end
   let x = app.x_of(i)
   let y = app.y_of(i)
   if app.root.kind_at(i) == kind_button()

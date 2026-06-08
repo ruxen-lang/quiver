@@ -13,22 +13,36 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Yoga (C) rejected: it forces an FFI/C dependency into L2's 100%-safe charter,
   couples an L2 layout concern to the L1 boundary, and is overkill for the
   Row+Col+nesting slice. Closes the layout-engine open decision in `ROADMAP.md`.
+- **Arena nesting — a node can own children.** `Col` gained flat parallel
+  tree-link hashes (`parent` / `child_first` / `child_last` / `child_next`,
+  node-id → node-id, `-1`/absent ⇒ none) plus a top-level root chain
+  (`root_first`/`root_last`) and a build cursor. No recursive type anywhere;
+  node id is still build order. New arena accessors: `parent_of`,
+  `first_child_of`, `next_sibling_of`, `root_head`, `container_at`. Pinned by
+  `tests/nesting.rx` (5 tests + 1 pending).
+- **`Row` / `Col` containers + nested own-flex layout pass.** `Col.row { |c| … }`
+  and `Col.col { |c| … }` build container nodes whose block-built nodes become
+  their children. `App.arrange` now recursively walks the nested arena: a flat
+  pre-pass measures each leaf's intrinsic text width once, then a measure/place
+  recursion stacks each container's children along its axis (`Row` = X,
+  `Col` = Y) and the top level as an implicit column — writing the same
+  `geom_x/y/w/h` the paint/hit-test passes already read. Containers paint
+  nothing (their children paint themselves). Pinned by `tests/row.rx` (5 tests).
+  Suite: **52 passed, 1 pending** (the two `app.rx`/`counter.rx` pins stayed
+  green).
 
-### Blocked
-- **Arena nesting + `Row` + the nested layout pass are NOT implemented this
-  cycle** — blocked by an active toolchain regression (see below). They are
-  TDD deliverables and cannot be written without a working `ruxen build`/`ruxen
-  test`; shipping unverifiable code would violate the project's pin-test
-  discipline. Carried forward in `ROADMAP.md`.
-
-### Known issues
-- **ruxen toolchain (`local-48c51aa`) cannot compile any program** — `ruxen
-  build` and `ruxen test` fail inside the embedded std/prelude (move/borrow
-  errors at fixed positions, identical for a bare `def main`). `ruxen check`
-  still passes. Documented as **Q18** in `CLAUDE.md`'s landmines with a minimal
-  repro (`tmp/test-cache/ruxen-prelude-miscompile.log`); owned by the ruxen
-  toolchain. The full quiver suite, including the `app.rx`/`counter.rx` pin
-  tests, is unrunnable in this environment until it is fixed.
+### Known limitations (ruxen, deferred)
+- **Reactive children inside a container** (`dyn_text`/`button` built inside
+  `row`/`col`) are deferred: a capturing closure stored under the container's
+  `&var *self` reborrow has its captures corrupted in this ruxen build
+  (**Q21** — wrong Int / SIGSEGV for a captured `State` handle). Static `text`
+  children — the first-slice content — are unaffected. `tests/nesting.rx`
+  keeps the reactive-child assertion as an `xit` pending. Repro:
+  `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
+- **Empty-hash lookups segfault** (**Q19**): `Hash.key?`/`get` on an empty hash
+  SIGSEGVs; `&Hash` parameters are unsound (silent miscompile on methods). All
+  quiver hash reads were hardened — direct field access guarded by
+  `size as Int > 0`. Repro: `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.
 
 - **Milestone 1 (L1 integration): the counter runs as a live window.**
   `examples/counter` opens a scaled SDL2 window over canvas's Skia `Canvas`

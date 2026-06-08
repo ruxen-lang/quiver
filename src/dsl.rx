@@ -1,4 +1,4 @@
-## The column builder DSL.
+## The container builder DSL.
 ##
 ## `App.build` hands the user's block a `&var Col`; each call appends one
 ## node. The tree is a *flat arena* — parallel, push-only arrays indexed by
@@ -6,11 +6,20 @@
 ## `Option[any Fn]` fields both miscompile in ruxen v1; parallel arrays with
 ## `-1` sentinels are the safe encoding).
 ##
+## Nesting (containers owning children) uses the same flat-arena discipline:
+## the parent/child/sibling LINKS live in `Hash[Int, Int]` (ruxen v1 has no
+## array index-assignment, so the threaded links — which are patched after a
+## node is created — must live in a structure that supports update). Every
+## link is a node id or `-1`; there is no recursive type anywhere. Node ids
+## are still build-order indices — the "ids ARE node ids" invariant holds.
+##
 ## The one DSL rule (docs/DSL.md):
 ##   - `text("...")`            -> STATIC:   built once, never re-evaluated.
 ##   - `dyn_text({ |ui| ... })` -> REACTIVE: the closure is a tracking scope,
 ##                                 re-run only when a state it read changes.
 ##   - `button("...", { |ui| ... })` -> static label, stored click handler.
+##   - `row({ |c| ... })` / `col({ |c| ... })` -> a CONTAINER node; the nodes
+##                                 built inside the block become its children.
 ##
 ## (`text` and `dyn_text` are distinct methods, not overloads of one name:
 ## ruxen v1 miscompiles &str-vs-closure overloads.)
@@ -20,12 +29,17 @@
 def kind_text -> Int { 1 }
 def kind_dyn_text -> Int { 2 }
 def kind_button -> Int { 3 }
+## Container kinds — own children, draw nothing themselves. The own-flex
+## layout pass arranges their children along an axis (`Row` = X, `Col` = Y;
+## see docs/LAYOUT.md).
+def kind_row -> Int { 4 }
+def kind_col -> Int { 5 }
 
-## A vertical stack of nodes under construction.
+## A tree of nodes under construction (the top level stacks vertically).
 class Col
-  ## Node kind per node id (kind_text / kind_dyn_text / kind_button).
+  ## Node kind per node id (kind_text / kind_dyn_text / kind_button / …).
   kinds: Array[Int]
-  ## Static label (text/button) or "" for reactive text.
+  ## Static label (text/button) or "" for reactive text / containers.
   labels: Array[String]
   ## Reactive text closures (tracking scopes).
   computes: Array[any Fn[Fn(&var Ui) -> String]]
@@ -36,6 +50,22 @@ class Col
   ## node id -> index into `handlers`, or -1.
   handler_of: Array[Int]
 
+  ## Tree links (node id -> node id, or absent ⇒ -1). Updatable, so they live
+  ## in hashes rather than the push-only parallel arrays above.
+  parent: Hash[Int, Int]
+  child_first: Hash[Int, Int]
+  child_last: Hash[Int, Int]
+  child_next: Hash[Int, Int]
+  ## The top-level (root) sibling chain — children of the implicit column.
+  root_first: Int
+  root_last: Int
+  ## The container currently being built into (-1 ⇒ top level).
+  parent_cursor: Int
+  ## Per-node intrinsic leaf width, id-indexed (push-only). `App.arrange`
+  ## fills this in a flat pre-pass; the recursive layout reads it back via
+  ## `iw_of`, so each leaf's text is measured exactly once per layout.
+  iw: Array[Int]
+
   def init
     self.kinds = Array.new
     self.labels = Array.new
@@ -43,6 +73,32 @@ class Col
     self.compute_of = Array.new
     self.handlers = Array.new
     self.handler_of = Array.new
+    self.parent = Hash.new
+    self.child_first = Hash.new
+    self.child_last = Hash.new
+    self.child_next = Hash.new
+    self.root_first = -1
+    self.root_last = -1
+    self.parent_cursor = -1
+    self.iw = Array.new
+  end
+
+  ## Reset the intrinsic-width buffer (called at the top of each layout pass).
+  def var reset_iw -> nil
+    self.iw = Array.new
+  end
+
+  ## Append one node's intrinsic width (id order matches build order).
+  def var push_iw(w: Int) -> nil
+    self.iw.push(w)
+  end
+
+  ## Intrinsic width recorded for node `i` (0 for containers / out of range).
+  def iw_of(i: Int) -> Int
+    match self.iw.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
   end
 
   ## Number of nodes built so far.
@@ -52,30 +108,48 @@ class Col
 
   ## A static text node: built once, never re-evaluated.
   def var text(label: &str) -> nil
+    let id = self.size
     self.kinds.push(kind_text())
     self.labels.push(String.from(label))
     self.compute_of.push(-1)
     self.handler_of.push(-1)
+    self.link(id)
   end
 
   ## A reactive text node. The closure is a tracking scope: the states it
   ## reads via `.get(ui)` subscribe this node, and only this node re-runs
   ## when one of them changes.
   def var dyn_text(compute: any Fn[Fn(&var Ui) -> String]) -> nil
+    let id = self.size
     self.kinds.push(kind_dyn_text())
     self.labels.push(String.from(""))
     self.compute_of.push(self.computes.size as Int)
     self.computes.push(compute)
     self.handler_of.push(-1)
+    self.link(id)
   end
 
   ## A button with a static label and a stored click handler.
   def var button(label: &str, on_click: any Fn[Fn(&var Ui) -> nil]) -> nil
+    let id = self.size
     self.kinds.push(kind_button())
     self.labels.push(String.from(label))
     self.compute_of.push(-1)
     self.handler_of.push(self.handlers.size as Int)
     self.handlers.push(on_click)
+    self.link(id)
+  end
+
+  ## A horizontal container: the nodes built inside `build` become its
+  ## children and are stacked along the X axis by the layout pass.
+  def var row(build: any Fn[Fn(&var Col) -> nil]) -> nil
+    self.container(kind_row(), build)
+  end
+
+  ## A vertical container: the nodes built inside `build` become its
+  ## children and are stacked along the Y axis by the layout pass.
+  def var col(build: any Fn[Fn(&var Col) -> nil]) -> nil
+    self.container(kind_col(), build)
   end
 
   ## Kind of node `i`, or 0 if out of range.
@@ -84,6 +158,59 @@ class Col
       Some(k) -> *k
       nil     -> 0
     end
+  end
+
+  ## True when node `i` is a container (row/col) that owns children.
+  def container_at(i: Int) -> Bool
+    let k = self.kind_at(i)
+    k == kind_row() || k == kind_col()
+  end
+
+  ## First child of node `i`, or -1 (leaf / out of range).
+  def first_child_of(i: Int) -> Int
+    if self.child_first.size as Int == 0
+      return -1
+    end
+    if !self.child_first.key?(i)
+      return -1
+    end
+    match self.child_first.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  ## Next sibling of node `i`, or -1 (last child / out of range).
+  def next_sibling_of(i: Int) -> Int
+    if self.child_next.size as Int == 0
+      return -1
+    end
+    if !self.child_next.key?(i)
+      return -1
+    end
+    match self.child_next.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  ## Parent of node `i`, or -1 (a top-level root / out of range).
+  def parent_of(i: Int) -> Int
+    if self.parent.size as Int == 0
+      return -1
+    end
+    if !self.parent.key?(i)
+      return -1
+    end
+    match self.parent.get(i)
+      Some(v) -> *v
+      nil     -> -1
+    end
+  end
+
+  ## First top-level (root) node, or -1 when the tree is empty.
+  def root_head -> Int
+    self.root_first
   end
 
   ## Static label of node `i` ("" for reactive text or out of range).
@@ -108,5 +235,65 @@ class Col
       Some(v) -> *v
       nil     -> -1
     end
+  end
+
+  private
+
+  ## Thread freshly-pushed node `id` into the current parent's child chain
+  ## (or the top-level root chain when `parent_cursor` is -1). Sets the
+  ## node's own links to leaf defaults.
+  def var link(id: Int) -> nil
+    self.parent.insert(id, self.parent_cursor)
+    self.child_first.insert(id, -1)
+    self.child_last.insert(id, -1)
+    self.child_next.insert(id, -1)
+    if self.parent_cursor < 0
+      self.append_root(id)
+    else
+      self.append_child(self.parent_cursor, id)
+    end
+  end
+
+  ## Append `id` to the top-level root sibling chain.
+  def var append_root(id: Int) -> nil
+    if self.root_first < 0
+      self.root_first = id
+    else
+      self.child_next.insert(self.root_last, id)
+    end
+    self.root_last = id
+  end
+
+  ## Append `id` to container `cid`'s child chain.
+  def var append_child(cid: Int, id: Int) -> nil
+    var last = -1
+    if self.child_last.key?(cid)
+      last = match self.child_last.get(cid)
+        Some(v) -> *v
+        nil     -> -1
+      end
+    end
+    if last < 0
+      self.child_first.insert(cid, id)
+    else
+      self.child_next.insert(last, id)
+    end
+    self.child_last.insert(cid, id)
+  end
+
+  ## Build a container node of `kind`, then run `build` with the cursor moved
+  ## onto it so the nodes it appends become this container's children. The
+  ## cursor is restored afterward, so containers nest to any depth.
+  def var container(kind: Int, build: any Fn[Fn(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.kinds.push(kind)
+    self.labels.push(String.from(""))
+    self.compute_of.push(-1)
+    self.handler_of.push(-1)
+    self.link(id)
+    let prev = self.parent_cursor
+    self.parent_cursor = id
+    build.(&var *self)
+    self.parent_cursor = prev
   end
 end

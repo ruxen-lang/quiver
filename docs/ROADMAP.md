@@ -80,31 +80,29 @@ Audited 2026-06-08 against `src/**` and CHANGELOG `[Unreleased]`. Ordered so the
 arena/layout foundation lands before the widgets that need it. `→ ruxen #X`
 marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
 
-> **⛔ BLOCKED (2026-06-08):** the Foundation + Row implementation below are TDD
-> deliverables and cannot proceed — the installed ruxen (`local-48c51aa`)
-> cannot `build`/`test` any program (Q18 in `CLAUDE.md`; repro in
-> `tmp/test-cache/ruxen-prelude-miscompile.log`). Resume once a bare `ruxen
-> build` succeeds. The layout ADR (design-only) was completed.
-
 ### Foundation (unblocks the whole widget library — do first)
 
-- [ ] **Nested tree in the arena** *(blocked on ruxen Q18)* — today the arena is
-      effectively a flat single column. Add **child-id arrays + `-1` sentinels**
-      (recursive class types crash ruxen v1, so flat parallel arrays, per the
-      landmines) so a node can own children. Prerequisite for every container below.
-- [ ] **`Row` + generic containers** *(blocked on ruxen Q18)* — horizontal
-      stacking and arbitrary nesting on top of the arena tree. First correct
-      slice: `Row` of `Col`s.
+- [x] **Nested tree in the arena** — `Col` now owns children via flat parallel
+      tree-link hashes (`parent`/`child_first`/`child_last`/`child_next`, node-id
+      → node-id, `-1`/absent ⇒ none) + a root chain + a build cursor. No
+      recursive type; node id = build order. Pinned by `tests/nesting.rx`.
+- [x] **`Row` + generic containers** — `Col.row { |c| … }` / `Col.col { |c| … }`
+      build container nodes; block-built nodes become their children; nesting is
+      arbitrary. First slice (`Row` of texts / `Col`s) laid out + painted, pinned
+      by `tests/row.rx`. (Reactive children inside a container deferred behind
+      ruxen Q21 — see Known limitations below.)
 
 ### Layout (needs a decision, then implement)
 
 - [x] **Layout-engine decision (ADR)** — `docs/LAYOUT.md` (2026-06-08): adopt an
       **own simple main-axis stacking/flex pass in safe Ruxen**, shipped
       incrementally; Yoga (C/FFI) rejected as a charter violation and overkill.
-- [ ] **Real layout engine** *(blocked on ruxen Q18)* — only a simple column
-      pass with **char-metric width estimates** exists. Per the ADR above,
-      implement the own-flex pass (intrinsic main-axis stacking over the nested
-      arena, generalised over axis for `Col`/`Row`) producing geometry for paint.
+- [x] **Real layout engine (own-flex v1)** — `App.arrange` recursively walks the
+      nested arena: a flat pre-pass measures each leaf's text width once, then a
+      measure/place recursion stacks each container's children along its axis
+      (`Row` = X, `Col` = Y; top level = implicit column), producing the
+      `geom_x/y/w/h` the paint pass reads. Grow/shrink/wrap/gap deferred
+      (additive, per the ADR). Char-metric widths remain (next item).
 - [ ] **Real text metrics** — replace char-metric estimates with canvas's Skia
       `measure_text` once it returns true advance width (**→ canvas / ruxen**:
       the FFI `&String` bug).
@@ -125,3 +123,14 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       need cross-package generic monomorphization. **→ ruxen Q17.**
 - [ ] **Unit-test quiver's public API directly** — `ruxen test` can't link the
       package, so behavior is pinned through the binary. **→ ruxen Q16.**
+- [ ] **Reactive children inside a container** (`dyn_text`/`button` in a
+      `row`/`col`) — blocked by **ruxen Q21**: a capturing closure stored under
+      the container's `&var *self` reborrow has its captures corrupted (wrong
+      Int / SIGSEGV for a captured class handle). Static `text` children work.
+      `tests/nesting.rx` holds the reactive-child assertion as `xit` pending;
+      re-enable when ruxen fixes capture under the self-reborrow. Repro in
+      `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
+- [ ] **Empty-hash lookups** (**ruxen Q19**) — `Hash.key?`/`get` on an empty hash
+      segfault and `&Hash` params are unsound; quiver works around both (direct
+      field access guarded by `size > 0`). Repro in
+      `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.

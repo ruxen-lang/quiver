@@ -19,7 +19,7 @@ class App
   root: Col
   ## node id -> current reactive text (static nodes are read from labels).
   cache: Hash[Int, String]
-  ## Geometry per node id, written by `layout`.
+  ## Geometry per node id, written by `arrange`.
   geom_x: Hash[Int, Int]
   geom_y: Hash[Int, Int]
   geom_w: Hash[Int, Int]
@@ -82,9 +82,19 @@ class App
   end
 
   ## Current display text of node `i`: reactive cache, else static label.
+  ##
+  ## The `size > 0` guard is load-bearing: `key?`/`get` on an EMPTY
+  ## `Hash[Int,String]` segfaults in this ruxen build (CLAUDE.md Q19), and a
+  ## tree with no `dyn_text` node leaves the cache empty. Only `dyn_text`
+  ## nodes are ever cached, so an empty cache means "all static" — fall
+  ## straight through to the label.
   def text_of(i: Int) -> String
-    if let Some(s) = self.cache.get(i)
-      return s.clone
+    if self.cache.size as Int > 0
+      if self.cache.key?(i)
+        if let Some(s) = self.cache.get(i)
+          return s.clone
+        end
+      end
     end
     self.root.label_at(i)
   end
@@ -115,31 +125,178 @@ class App
     end
   end
 
-  ## Column layout: stack nodes top to bottom, one row each. Buttons get a
-  ## label-sized box; text nodes span their text width.
+  ## Own-flex layout pass (docs/LAYOUT.md): walk the nested arena and write
+  ## absolute geometry for every node. The top level is an implicit column —
+  ## roots stack on Y at x=0. Each container places its children along its
+  ## axis (`Col` = Y, `Row` = X) at their intrinsic main-axis sizes; leaves
+  ## span their text width by one row. Two phases per subtree: measure
+  ## (intrinsic size) then place (absolute position).
   def var arrange -> nil
+    self.measure_leaves
+    var node = self.root.root_head
+    var y = 0
+    while node >= 0
+      let h = self.measure_h(node)
+      self.place_node(node, 0, y)
+      y = y + h
+      node = self.root.next_sibling_of(node)
+    end
+  end
+
+  ## FLAT pre-pass: resolve every leaf's intrinsic text width ONCE (a single
+  ## `text_of` per node) and stash it on the arena via `Col.push_iw`. The
+  ## recursive measure/place then reads it back with `self.root.iw_of`,
+  ## re-measuring nothing. Keeping this the *only* place `text_of`/`self.cache`
+  ## is touched during layout also keeps the empty-cache guard (Q19) in one
+  ## spot rather than on every recursive width query.
+  def var measure_leaves -> nil
+    self.root.reset_iw
     var i = 0
     let n = self.root.size
-    var y = 0
     while i < n
-      let label = self.text_of(i)
-      let w = (label.size as Int) * char_width() + pad_x() * 2
-      self.geom_x.insert(i, 0)
-      self.geom_y.insert(i, y)
-      self.geom_w.insert(i, w)
-      self.geom_h.insert(i, row_height())
-      if w > self.span_w
-        self.span_w = w
+      if self.root.container_at(i)
+        self.root.push_iw(0)
+      else
+        self.root.push_iw(self.leaf_w(i))
       end
-      y = y + row_height()
       i = i + 1
     end
   end
 
-  def x_of(i: Int) -> Int { self.geom_lookup(&self.geom_x, i) }
-  def y_of(i: Int) -> Int { self.geom_lookup(&self.geom_y, i) }
-  def w_of(i: Int) -> Int { self.geom_lookup(&self.geom_w, i) }
-  def h_of(i: Int) -> Int { self.geom_lookup(&self.geom_h, i) }
+  ## Intrinsic main-axis-aware width of node `i`.
+  ##   leaf      -> its pre-measured text width
+  ##   Row       -> sum of children widths
+  ##   Col       -> max of children widths
+  def measure_w(i: Int) -> Int
+    if !self.root.container_at(i)
+      return self.root.iw_of(i)
+    end
+    var total = 0
+    var maxw = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      let cw = self.measure_w(c)
+      total = total + cw
+      if cw > maxw
+        maxw = cw
+      end
+      c = self.root.next_sibling_of(c)
+    end
+    if self.root.kind_at(i) == kind_row()
+      return total
+    end
+    maxw
+  end
+
+  ## Intrinsic height of node `i`.
+  ##   leaf -> one row
+  ##   Row  -> max of children heights
+  ##   Col  -> sum of children heights
+  def measure_h(i: Int) -> Int
+    if !self.root.container_at(i)
+      return row_height()
+    end
+    var total = 0
+    var maxh = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      let ch = self.measure_h(c)
+      total = total + ch
+      if ch > maxh
+        maxh = ch
+      end
+      c = self.root.next_sibling_of(c)
+    end
+    if self.root.kind_at(i) == kind_col()
+      return total
+    end
+    maxh
+  end
+
+  ## Place node `i` (and its subtree) with its top-left at (x, y).
+  def var place_node(i: Int, x: Int, y: Int) -> nil
+    let w = self.measure_w(i)
+    let h = self.measure_h(i)
+    self.geom_x.insert(i, x)
+    self.geom_y.insert(i, y)
+    self.geom_w.insert(i, w)
+    self.geom_h.insert(i, h)
+    if x + w > self.span_w
+      self.span_w = x + w
+    end
+    if self.root.container_at(i)
+      self.place_children(i, x, y)
+    end
+  end
+
+  ## Lay out the children of container `i` along its axis, anchored at (x, y).
+  def var place_children(i: Int, x: Int, y: Int) -> nil
+    let is_row = self.root.kind_at(i) == kind_row()
+    var cx = x
+    var cy = y
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      self.place_node(c, cx, cy)
+      if is_row
+        cx = cx + self.measure_w(c)
+      else
+        cy = cy + self.measure_h(c)
+      end
+      c = self.root.next_sibling_of(c)
+    end
+  end
+
+  def x_of(i: Int) -> Int
+    if self.geom_x.size as Int == 0
+      return 0
+    end
+    if !self.geom_x.key?(i)
+      return 0
+    end
+    match self.geom_x.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def y_of(i: Int) -> Int
+    if self.geom_y.size as Int == 0
+      return 0
+    end
+    if !self.geom_y.key?(i)
+      return 0
+    end
+    match self.geom_y.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def w_of(i: Int) -> Int
+    if self.geom_w.size as Int == 0
+      return 0
+    end
+    if !self.geom_w.key?(i)
+      return 0
+    end
+    match self.geom_w.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
+
+  def h_of(i: Int) -> Int
+    if self.geom_h.size as Int == 0
+      return 0
+    end
+    if !self.geom_h.key?(i)
+      return 0
+    end
+    match self.geom_h.get(i)
+      Some(v) -> *v
+      nil     -> 0
+    end
+  end
 
   ## Topmost interactive node containing (x, y), or -1.
   def hit_test(x: Int, y: Int) -> Int
@@ -168,11 +325,10 @@ class App
 
   private
 
-  def geom_lookup(table: &Hash[Int, Int], i: Int) -> Int
-    match table.get(i)
-      Some(v) -> *v
-      nil     -> 0
-    end
+  ## Text width of a leaf node (char-metric estimate until Skia metrics land).
+  def leaf_w(i: Int) -> Int
+    let label = self.text_of(i)
+    (label.size as Int) * char_width() + pad_x() * 2
   end
 
   def contains(i: Int, x: Int, y: Int) -> Bool

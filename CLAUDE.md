@@ -65,40 +65,41 @@ ruxen fmt <file>                  # canonical formatting
   `#` comments at file top. Generic functions don't monomorphize for types
   defined in a *consuming* package (keep mixin impls used by quiver generics
   inside quiver).
+- **Q19 — `Hash.key?`/`Hash.get` on an EMPTY hash SEGFAULTS** (any value type;
+  `ruxen check` passes, runtime SIGSEGVs). `Hash.size` is safe. Guard every
+  lookup: `if h.size as Int > 0 { … h.key?/get … }`. Repro + boundary in
+  `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.
+- **`&Hash[...]` / `&Set[...]` parameter types are unsound** — `Hash`/`Set` are
+  mixins without runtime dispatch. A *free fn* errors `E1118`; a *method* with a
+  `&Hash` param compiles then SEGFAULTS. Never pass a collection by `&` to a
+  helper — access the field directly (`self.<field>.get`, guarded by Q19).
+- **Q21 — a capturing closure STORED from inside a self-reborrow build block
+  corrupts its captures.** `def var container(build) … build.(&var *self)` then
+  inside `c.dyn_text({ |ui| count.get(ui) })`: the stored closure's captured
+  `count` reads as garbage (wrong Int; SEGFAULT for a captured class handle).
+  The top-level `App.build` (`f.(&var local.field)`, no self-reborrow) is fine.
+  So static `text` children in `row`/`col` work; reactive `dyn_text`/`button`
+  children are blocked until ruxen fixes capture under the reborrow. Repro:
+  `col.row({ |c| c.dyn_text({ |ui| count.get(ui) }) })` → invoking the compute
+  segfaults (`count.peek` before invocation is still correct).
 
-### ⛔ ACTIVE TOOLCHAIN BLOCKER (2026-06-08) — Q18: prelude/std miscompile
+### Q18 — RESOLVED 2026-06-08: stale divergent install (NOT a master bug)
 
-The installed `ruxen` (`local-48c51aa`) **cannot compile anything** — not even
-a bare `def main`. `ruxen build` AND `ruxen test` both fail in std/prelude code
-that every program links, with borrow-check errors at fixed positions
-(`55:19 x defined → 56:16 moved into call → 57:18 used after move`; same at
-69, 104/106, 135; plus `cannot assign to ok/found/out — currently borrowed` at
-81/92/135/153). The positions are identical regardless of user source — they
-are inside the embedded std, not user code.
+**Root cause was a stale, DIVERGENT toolchain install** (`local-48c51aa`), a
+commit from an in-progress stdlib→`.rx` migration branch whose migrated prelude
+fails its own borrow-check — so that build could not compile *anything*, not
+even a bare `def main` (`ruxen build`/`ruxen test` failed at fixed std-internal
+positions; `ruxen check` still passed). It was **never a quiver bug and never a
+master bug**.
 
-Minimal repro (zero std usage, fails identically):
+Fix: the toolchain was **reinstalled from master** (`35d80b7`). Verified — a
+bare program builds, and the full quiver suite is green (`ruxen test` → 42
+passed, 0 failed). No quiver source change was involved.
 
-```
-# Ruxen.toml: [build] type = "binary"
-# src/main.rx:
-def main
-  let x = 1 + 1
-end
-```
-
-→ `ruxen build` emits the move/borrow errors above and fails. Full log:
-`tmp/test-cache/ruxen-prelude-miscompile.log`.
-
-**Consequence:** the whole quiver suite (incl. the `app.rx`/`counter.rx` pin
-tests) is currently *uncompilable through no fault of quiver source* — the
-baseline cannot be run green in this environment. Any TDD work (arena nesting,
-`Row`, the layout pass) is **blocked** until the toolchain is fixed: tests
-cannot be watched fail→green and code cannot be `ruxen build`-verified.
-
-Owner: ruxen toolchain (a separate agent). File as `Q18` in
-`../ruxen/docs/dev/gui-stack-v1-issues.md` + `../ruxen/docs/TASKS.md` with the
-repro above. Re-run `ruxen build` on a bare project to confirm fixed before
-resuming quiver layout work.
+Lesson for next time: if `ruxen build` fails on a *bare* `def main` with
+std-internal borrow errors, suspect the install, not your code — check
+`ruxen --version` / the install commit before assuming a language bug, and
+reinstall from master.
 
 ## Task tracking & keeping context current
 

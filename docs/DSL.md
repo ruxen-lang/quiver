@@ -53,6 +53,44 @@ Prototyping against ruxen v1 forced three changes, each pinned by a probe:
 None of these changes the model — build once, `dyn_text` closures are the
 only things that ever re-run.
 
+## Containers: `row` / `col` and arena nesting
+
+A node can own children. The arena stays flat (no recursive type, per the
+landmines): `Col` carries tree-link hashes `parent` / `child_first` /
+`child_last` / `child_next` (node-id → node-id; absent ⇒ `-1`), a top-level
+root chain (`root_first`/`root_last`), and a build cursor `parent_cursor`.
+Node ids remain build-order indices — the "ids ARE node ids" invariant holds.
+
+```ruxen
+root.text("title")                  # node 0, a top-level (root) leaf
+root.row({ |c: &var Col|            # node 1, a container; cursor moves onto it
+  c.text("left")                    # node 2, child of the row
+  c.col({ |c2: &var Col|            # node 3, a nested container
+    c.text("a")                     # node 4, child of the col
+    c.text("b")                     # node 5, child of the col
+  })
+})
+```
+
+`row` (X axis) and `col` (Y axis) push a container node, move the cursor onto
+it, run the block, then restore the cursor — so nesting is arbitrary. The
+layout pass (`App.arrange`, docs/LAYOUT.md) walks this tree; containers paint
+nothing, their children paint themselves.
+
+### Deviation: reactive children inside a container are deferred (ruxen Q21)
+
+The first slice ships **static `text`** inside `row`/`col`. A `dyn_text` or
+`button` built *inside* a container would store a closure that captures state
+(e.g. a `State` handle), and in this ruxen build a capturing closure stored
+through the container's `build.(&var *self)` self-reborrow has its captures
+**corrupted** (wrong value for an `Int`; SIGSEGV for a captured class handle).
+The top-level `App.build` is unaffected (it invokes the builder as
+`f.(&var local.field)`, never a self-reborrow). So reactive *children* are
+held behind ruxen Q21 — `tests/nesting.rx` keeps that assertion as an `xit`
+pending, and reactive content lives at the top level until ruxen fixes
+capture under the reborrow. See `CLAUDE.md` landmines (Q21) and
+`tmp/test-cache/ruxen-closure-capture-reborrow.md`.
+
 ## Why it must stay pinned with tests
 
 The static-vs-reactive boundary is the single rule users rely on for
