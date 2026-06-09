@@ -63,6 +63,15 @@ event stream), `examples/counter` runs as a real windowed app:
 
 ## Later cycles
 
+- **DSL ergonomics** (audit 2026-06-09, `docs/decisions/dsl-ergonomics.md`) —
+  the builder stays Ruby-block-shaped; refinements live *within* that idiom. Win
+  shipped this cycle: inner stored-closure / container-block params drop their
+  type annotations (`{ |ui2| … }` / `{ |c| … }`), inferred from the builder
+  signature — applied across all three examples + the docs. Remaining ergonomic
+  wins are **language-gated** and filed as Q-candidates in that doc (top-level
+  `App.build` block param inference; non-Copy call-result as a method arg;
+  auto-reborrow of a `&var` used N>1 times) — to triage into the ruxen ledger,
+  not hacked around here.
 - **Widget library** — rows/containers, lists, inputs, nesting (needs
   child-id arrays in the arena), styling.
 - **Text / i18n / accessibility** — via canvas's Skia paragraph /
@@ -177,8 +186,30 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       both backends).
 - [ ] **Drop the single-`PaintSurface` workaround** — multiple paint backends
       need cross-package generic monomorphization. **→ ruxen Q17.**
-- [ ] **Unit-test quiver's public API directly** — `ruxen test` can't link the
-      package, so behavior is pinned through the binary. **→ ruxen Q16.**
+- [x] **Unit-test quiver's public API directly** (**ruxen Q16 fixed**) — `ruxen
+      test` now compiles tests against the package's own + dependency symbols
+      (library/`check`/`test` flat-merge dependency sources; verified by
+      ruxen's `dep_visibility.rs`). quiver's headless suite was always able to
+      name its own public types (`App`/`Ui`/`Col`/`RecordingSurface`); this
+      cycle used that to pin previously under-tested public behavior **directly**
+      rather than only through the example binaries:
+      - **`tests/caret_edit.rx`** — the text-input editing surface
+        `input.rx`/`window_events.rx` left uncovered: forward delete
+        (`key_delete`), Home/End (`key_home`/`key_end`), mid-string insert/delete,
+        no-op at the ends, control keys with nothing focused. (These had **zero**
+        coverage before.)
+      - **`tests/resize.rx`** — `App.resize` re-layout over a nested tree + a
+        list: design-size tracking across multiple resizes, geometry stability
+        (re-arrange is a no-op move, not a corruption), list viewport/content
+        height + scroll offset surviving a resize, reactive state/cache
+        undisturbed, hit-testing still correct.
+      - **`tests/overlay.rx`** — the overlay/popup primitive (`open_overlay`/
+        `close_overlay`/`overlay_open?`/`overlay_owner`/anchor) as a reusable
+        primitive in its own right: open/close/owner/anchor, re-open replaces the
+        owner, and the click-consumed-not-passed-below rule — independent of the
+        `select` dropdown that `select.rx` already routes through it.
+      Suite: **142 passed** (124 → 142, additive); the `app.rx`/`counter.rx`
+      static-vs-reactive pins were not touched.
 - [x] **Reactive children inside a container** (`dyn_text`/`button` in a
       `row`/`col`) — **ruxen Q26 fixed (2026-06-08)**: captures survive the
       container's `&var *self` reborrow, so reactive children re-render on state

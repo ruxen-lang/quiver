@@ -30,7 +30,7 @@ def header(root: &var Col, name: &State[String], dark: &State[Bool]) -> nil
   root.text("Settings")                                    # static title
   # Reactive summary: recomputes when `name` OR `dark` changes — because the
   # closure calls `.get(ui)` on both, it subscribes this node to both.
-  root.dyn_text({ |ui: &var Ui| "User: #{nm.get(ui)} · theme #{on_off(dk.get(ui))}" })
+  root.dyn_text({ |ui| "User: #{nm.get(ui)} · theme #{on_off(dk.get(ui))}" })
 end
 
 ## The name field: a label + a single-line text `input` bound to `name`.
@@ -43,7 +43,7 @@ def name_field(root: &var Col, name: &State[String]) -> nil
   # build (see the example README / tmp/test-cache repro) — `let`-binding first
   # is the (idiomatic) fix, used throughout this app.
   let style = card_style
-  root.row_styled(style, { |c: &var Col|
+  root.row_styled(style, { |c|
     c.text("Name:")
     c.input(nm, 160)
   })
@@ -62,10 +62,10 @@ def toggles(root: &var Col, notify: &State[Bool], dark: &State[Bool]) -> nil
   let nt_read = *notify
   let dk_read = *dark
   let style = card_style
-  root.col_styled(style, { |c: &var Col|
+  root.col_styled(style, { |c|
     c.checkbox(nt, "Email notifications")
     c.checkbox(dk, "Dark mode")
-    c.dyn_text({ |ui: &var Ui| "notify=#{on_off(nt_read.get(ui))}, dark=#{on_off(dk_read.get(ui))}" })
+    c.dyn_text({ |ui| "notify=#{on_off(nt_read.get(ui))}, dark=#{on_off(dk_read.get(ui))}" })
   })
 end
 
@@ -76,8 +76,8 @@ def volume_control(root: &var Col, volume: &State[Int]) -> nil
   let vol_read = *volume     # captured by the read-out closure
   let vol = *volume          # consumed by the slider builder
   let style = card_style
-  root.col_styled(style, { |c: &var Col|
-    c.dyn_text({ |ui: &var Ui| volume_label(vol_read.get(ui)) })
+  root.col_styled(style, { |c|
+    c.dyn_text({ |ui| volume_label(vol_read.get(ui)) })
     c.slider(vol, 0, 100, 200)
   })
 end
@@ -90,7 +90,7 @@ def theme_picker(root: &var Col, theme: &State[Int]) -> nil
   let th = *theme
   let style = card_style
   let options = theme_options       # let-bind the Array before the select call
-  root.row_styled(style, { |c: &var Col|
+  root.row_styled(style, { |c|
     c.text("Theme:")
     c.select(th, options, 160)
   })
@@ -102,7 +102,7 @@ end
 ## quiver's builder runs once, so we build all of them here.
 def device_list(root: &var Col) -> nil
   let rows = device_rows
-  root.list(row_height() * 3, { |c: &var Col|
+  root.list(row_height() * 3, { |c|
     var i = 0
     let n = rows.size as Int
     while i < n
@@ -123,8 +123,8 @@ end
 def save_bar(root: &var Col, saves: &State[Int]) -> nil
   let sv_click = *saves      # captured by the button handler
   let sv_read = *saves       # captured by the read-out closure
-  root.row({ |c: &var Col|
-    c.button("Save", { |ui: &var Ui| sv_click.update(ui, { |v| v + 1 }) })
-    c.dyn_text({ |ui: &var Ui| "saved #{sv_read.get(ui)}×" })
+  root.row({ |c|
+    c.button("Save", { |ui| sv_click.update(ui, { |v| v + 1 }) })
+    c.dyn_text({ |ui| "saved #{sv_read.get(ui)}×" })
   })
 end

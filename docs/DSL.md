@@ -17,13 +17,22 @@ tree; reactivity granularity comes from which builder method you call.
 ```ruxen
 var app = App.build({ |ui: &var Ui, root: &var Col|
   let count = ui.state(0)
-  root.text("Counter")                                          # static
-  root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })  # reactive
-  root.button("tap", { |ui2: &var Ui|                           # handler
+  root.text("Counter")                              # static
+  root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })  # reactive
+  root.button("tap", { |ui2|                        # handler
     count.update(ui2, { |c| c + 1 })
   })
 })
 ```
+
+The **outer `App.build` block keeps its param types** (`{ |ui: &var Ui, root:
+&var Col| … }`) — that one block is the app's entry point and its types are not
+inferred today (a ruxen inference gap; see
+`docs/decisions/dsl-ergonomics.md`). Every **inner** stored-closure / container
+block, though, drops them — `{ |ui2| … }`, `{ |c| … }` — because ruxen infers
+the parameter type from the builder method's signature. Use the terse form for
+inner blocks; it reads as a plain Ruby block. (The annotated form still
+compiles, so existing code is unaffected.)
 
 - `App.build` runs the block **once**; `root` is the column under
   construction (a flat arena of nodes — see below).
@@ -62,12 +71,12 @@ root chain (`root_first`/`root_last`), and a build cursor `parent_cursor`.
 Node ids remain build-order indices — the "ids ARE node ids" invariant holds.
 
 ```ruxen
-root.text("title")                  # node 0, a top-level (root) leaf
-root.row({ |c: &var Col|            # node 1, a container; cursor moves onto it
-  c.text("left")                    # node 2, child of the row
-  c.col({ |c2: &var Col|            # node 3, a nested container
-    c.text("a")                     # node 4, child of the col
-    c.text("b")                     # node 5, child of the col
+root.text("title")        # node 0, a top-level (root) leaf
+root.row({ |c|            # node 1, a container; cursor moves onto it
+  c.text("left")          # node 2, child of the row
+  c.col({ |c2|            # node 3, a nested container
+    c.text("a")           # node 4, child of the col
+    c.text("b")           # node 5, child of the col
   })
 })
 ```
@@ -85,8 +94,8 @@ child re-renders on state change and a button child can mutate state, exactly
 like a top-level node.
 
 ```ruxen
-root.row({ |c: &var Col|
-  c.dyn_text({ |ui| "n: #{count.get(ui)}" })            # re-renders on change
+root.row({ |c|
+  c.dyn_text({ |ui| "n: #{count.get(ui)}" })                 # re-renders on change
   c.button("tap", { |ui| count.update(ui, { |x| x + 1 }) })  # mutates state
 })
 ```
@@ -107,7 +116,7 @@ A container can carry a `Style` — built with chainable setters and passed to
 ```ruxen
 root.row_styled(
   Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4),
-  { |c: &var Col| c.text("x") })
+  { |c| c.text("x") })
 ```
 
 | Setter | Meaning |
@@ -140,7 +149,7 @@ A `list` is a `col`-like vertical container with a **fixed viewport height**: it
 clips its children and scrolls them when the content overflows.
 
 ```ruxen
-root.list(96, { |c: &var Col|     # 96px viewport
+root.list(96, { |c|               # 96px viewport
   c.text("row 1")
   c.text("row 2")
   c.text("row 3")

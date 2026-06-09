@@ -87,8 +87,10 @@ def drive(win0: Window) -> nil
   var app = App.build({ |ui: &var Ui, root: &var Col|
     let count = ui.state(0)
     root.text("Counter")
-    root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
-    root.button("tap +1", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+    # Stored-closure params need no type annotation — quiver infers `ui2: &var Ui`
+    # from the builder's signature, so the block reads as a plain Ruby block.
+    root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })
+    root.button("tap +1", { |ui2| count.update(ui2, { |c| c + 1 }) })
   })
   var surface = RecordingSurface.new
 

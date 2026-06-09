@@ -23,14 +23,14 @@ def build_app -> App
 
     # Two action buttons. Their handlers capture `todos` (non-consuming) and
     # mutate it; the row text reflects done state via the model.
-    root.row({ |c: &var Col|
-      c.button("Add", { |u: &var Ui| todos.add(u, "new task") })   # append a row
-      c.button("Toggle 0", { |u: &var Ui| todos.toggle(u, 0) })    # flip first
-      c.button("Del 0", { |u: &var Ui| todos.remove(u, 0) })       # drop first
+    root.row({ |c|
+      c.button("Add", { |u| todos.add(u, "new task") })   # append a row
+      c.button("Toggle 0", { |u| todos.toggle(u, 0) })    # flip first
+      c.button("Del 0", { |u| todos.remove(u, 0) })       # drop first
     })
 
     # The reactive list: one row per item, scrolling within a fixed viewport.
-    root.list_of(todos, row_height() * 6, { |c: &var Col, m: ListModel, i: Int|
+    root.list_of(todos, row_height() * 6, { |c, m, i|
       c.text("#{m.row_text(i)}")
     })
   })

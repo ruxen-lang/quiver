@@ -7,6 +7,40 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Direct public-API unit tests (ruxen Q16 unblocked).** `ruxen test` now
+  compiles tests against the package's own + dependency symbols, so previously
+  binary-only behavior is pinned directly. Three new headless files
+  (+18 tests; suite **124 → 142**, additive — the `app.rx`/`counter.rx`
+  static-vs-reactive pins were not touched):
+  - `tests/caret_edit.rx` — the text-input editing surface that had **zero**
+    direct coverage: forward delete (`key_delete`), Home/End
+    (`key_home`/`key_end`), mid-string insert/delete, no-op at the ends, and
+    control keys with nothing focused.
+  - `tests/resize.rx` — `App.resize` re-layout over a nested tree + a list:
+    design-size tracking, geometry stability across a resize, list
+    viewport/content height + scroll offset survival, reactive state/cache left
+    undisturbed, hit-testing still correct.
+  - `tests/overlay.rx` — the overlay/popup primitive
+    (`open_overlay`/`close_overlay`/`overlay_open?`/`overlay_owner`/anchor) as a
+    reusable primitive in its own right (re-open replaces the owner; an outside
+    click is consumed, not passed to the content below) — independent of the
+    `select` dropdown that already routes through it.
+
+### Changed
+- **DSL: terser builder blocks (no API change).** Inner stored-closure and
+  container-block parameters no longer need a type annotation — ruxen infers
+  `{ |ui2| … }` / `{ |c| … }` / `{ |c, m, i| … }` from the builder method's
+  signature, so the blocks read as plain Ruby blocks instead of
+  `{ |ui2: &var Ui| … }`. The annotated form still compiles (every existing test
+  proves it); this is purely a cleaner spelling. Applied across `examples/counter`,
+  `examples/todo`, `examples/settings`, and the worked snippets in `docs/DSL.md`.
+  The outer `App.build({ |ui: &var Ui, root: &var Col| … })` block keeps its
+  annotations — a narrow ruxen top-level-inference gap, filed as a Q-candidate in
+  the new `docs/decisions/dsl-ergonomics.md` (which also audits the remaining
+  language-gated ergonomic wins: non-Copy call-result method args, `&var`
+  auto-reborrow).
+
+### Added
 - **Windowed event consumption — text input, scroll, resize.** quiver now
   consumes canvas's full event set:
   - `App.text_input(cp)` inserts a Unicode codepoint at the focused input's
