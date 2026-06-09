@@ -1,0 +1,91 @@
+# Pins App.resize (docs/DSL.md, "Windowed event contract"): a window resize
+# records the new design size and re-arranges the WHOLE tree. window_events.rx
+# checks a 2-node form; this file pins resize over a NESTED tree + a list, that
+# the re-layout is stable and idempotent, and that resize does not disturb
+# reactive state / the text cache. Headless.
+Tester.describe("resize — design size + stable re-layout") do |t: &var Tester|
+  # A small but non-trivial tree: a static header, a row of two texts, and a
+  # scrolling list — exercises container + list geometry through a resize.
+  let app_with = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let count = ui.state(0)
+      root.text("Header")                         # node 0
+      root.row({ |c|
+        c.text("L")                               # node 2
+        c.dyn_text({ |ui2| "n=#{count.get(ui2)}" }) # node 3
+      })                                           # row = node 1
+      root.list(row_height() * 2, { |c|
+        c.text("row a")                            # node 5
+        c.text("row b")                            # node 6
+        c.text("row c")                            # node 7 (overflows)
+      })                                           # list = node 4
+      root.button("tap", { |ui2| count.update(ui2, { |x| x + 1 }) }) # node 8
+    })
+  }
+
+  t.it("resize records the design size; multiple resizes keep the last") do
+    var app = app_with.()
+    app.resize(800, 600)
+    t.expect(app.design_width).to_eq(800)
+    t.expect(app.design_height).to_eq(600)
+    app.resize(320, 240)
+    t.expect(app.design_width).to_eq(320)
+    t.expect(app.design_height).to_eq(240)
+  end
+
+  t.it("re-layout is stable: geometry is identical before and after a resize") do
+    var app = app_with.()
+    let hy = app.y_of(0)
+    let rowy = app.y_of(1)
+    let listy = app.y_of(4)
+    let buty = app.y_of(8)
+    app.resize(1024, 768)
+    # top-anchored layout doesn't depend on the design size yet, so geometry is
+    # unchanged — the re-arrange must be a no-op move, never a corruption.
+    t.expect(app.y_of(0)).to_eq(hy)
+    t.expect(app.y_of(1)).to_eq(rowy)
+    t.expect(app.y_of(4)).to_eq(listy)
+    t.expect(app.y_of(8)).to_eq(buty)
+  end
+
+  t.it("the list keeps its fixed viewport height and content height across resize") do
+    var app = app_with.()
+    let vh = app.h_of(4)
+    let ch = app.content_height_of(4)
+    t.expect(vh).to_eq(row_height() * 2)          # viewport, not content
+    t.expect(ch).to_eq(row_height() * 3)          # 3 rows of content
+    app.resize(640, 480)
+    t.expect(app.h_of(4)).to_eq(vh)
+    t.expect(app.content_height_of(4)).to_eq(ch)
+  end
+
+  t.it("a scroll offset survives a resize (re-arrange clamps, doesn't reset)") do
+    var app = app_with.()
+    app.scroll_to(4, row_height())                # scroll the list one row down
+    t.expect(app.scroll_of(4)).to_eq(row_height())
+    app.resize(500, 400)
+    t.expect(app.scroll_of(4)).to_eq(row_height())
+  end
+
+  t.it("resize does not disturb reactive state or the text cache") do
+    var app = app_with.()
+    app.click(8)                                  # bump count -> n=1
+    app.flush
+    t.expect(app.text_of(3)).to_eq(String.from("n=1"))
+    app.resize(900, 700)
+    # resize re-arranges geometry only; the cached reactive text is untouched
+    t.expect(app.text_of(3)).to_eq(String.from("n=1"))
+    # and the reactive path still works after a resize
+    app.click(8)
+    app.flush
+    t.expect(app.text_of(3)).to_eq(String.from("n=2"))
+  end
+
+  t.it("hit-testing still works after a resize") do
+    var app = app_with.()
+    app.resize(400, 300)
+    # the button (node 8) is below header + row + list (heights 24 + 24 + 48)
+    let by = row_height() + row_height() + row_height() * 2 + 2
+    t.expect(app.hit_test(2, by)).to_eq(8)
+  end
+end
