@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **quiver no longer declares `canvas` as a library dependency — it is now
+  platform-agnostic at the manifest level.** quiver's `src/`/`tests/` never
+  referenced a canvas symbol (paint crosses the boundary as plain Ints/Strings);
+  the dependency existed only for transitive convenience. Removing it (a) fixes
+  `ruxen test`, which broke once a Q16-enabled toolchain flat-merged canvas's
+  FFI-calling bodies into quiver's test **executable** without canvas's C runtime
+  linked (undefined `ruxen_canvas_*`), and (b) is the correct L2 layering: an app
+  picks its rendering engine and declares both quiver + an engine itself (the
+  examples already do). Suite back to **142 passed**. Filed the underlying
+  flat-merge-of-FFI-dependency link gap as a ruxen Q-candidate.
+
 ### Added
 - **Direct public-API unit tests (ruxen Q16 unblocked).** `ruxen test` now
   compiles tests against the package's own + dependency symbols, so previously
