@@ -128,13 +128,15 @@ def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface
   while running
     match win.poll_event
       Some(ev) -> match ev
-        Event.PointerDown(x, y) -> app.pointer_down(x, y)
-        Event.PointerMove(x, y) -> app.pointer_move(x, y)
-        Event.PointerUp(x, y)   -> app.pointer_up(x, y)
+        # canvas delivers Float32 sub-pixel coords; quiver's design space is
+        # whole Ints, so the shell quantizes at this seam (the one cast site).
+        Event.PointerDown(x, y) -> app.pointer_down(x as Int, y as Int)
+        Event.PointerMove(x, y) -> app.pointer_move(x as Int, y as Int)
+        Event.PointerUp(x, y)   -> app.pointer_up(x as Int, y as Int)
         Event.TextInput(cp)     -> app.text_input(cp)   # printable chars insert here
         Event.KeyDown(k)        -> app.key_down(k)        # control-only: edit / caret
-        Event.Scroll(dx, dy)    -> app.scroll(dx, dy)
-        Event.Resize(ww, hh)    -> app.resize(ww, hh)
+        Event.Scroll(dx, dy)    -> app.scroll(dx as Int, dy as Int)
+        Event.Resize(ww, hh)    -> app.resize(ww as Int, hh as Int)
         Event.CloseRequested    -> running = false
         _                       -> nil
       end
