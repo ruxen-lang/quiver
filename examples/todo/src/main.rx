@@ -94,6 +94,13 @@ def run_headless(app: &var App, surface: &var RecordingSurface) -> nil
 end
 
 def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface) -> nil
+  # Inject real text metrics through quiver's measure seam (the binary is the
+  # only place quiver L2 + canvas L1 symbols meet; quiver itself stays canvas-
+  # free). Plain capture of `win` (non-Copy class — not `move`) is sound today;
+  # the closure returns canvas's true advance width at quiver's slice font size.
+  # The headless path (run_headless) never injects, so it keeps char metrics.
+  app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
+
   paint_all(app, surface)
   blit(win, surface)
 

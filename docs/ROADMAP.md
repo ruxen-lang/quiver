@@ -112,9 +112,20 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       (`Row` = X, `Col` = Y; top level = implicit column), producing the
       `geom_x/y/w/h` the paint pass reads. Grow/shrink/wrap/gap deferred
       (additive, per the ADR). Char-metric widths remain (next item).
-- [ ] **Real text metrics** — replace char-metric estimates with canvas's Skia
-      `measure_text` once it returns true advance width (**→ canvas / ruxen**:
-      the FFI `&String` bug).
+- [x] **Real text metrics** — replace char-metric estimates with canvas's Skia
+      `measure_text` true advance width, **injected through a seam** rather than
+      imported (quiver is canvas-free by charter; `Ruxen.toml` no longer declares
+      canvas). `App.set_measure({ |text, size| Int })` lets the shell binary —
+      the only place quiver L2 + canvas L1 symbols meet — supply real metrics;
+      `arrange`'s flat pre-pass routes leaf-text + checkbox-label widths through
+      one `text_width` helper that calls the seam when set, else the char-metric
+      fallback (so headless/tests/Skia-less runs are byte-identical). Measure runs
+      **once per leaf per arrange** (pinned by an invocation-count double), not
+      per flush. All three examples inject `measure_text_sized` on their windowed
+      path. ADR: `docs/decisions/text-metrics-seam.md`; pinned by
+      `tests/text_metrics.rx` (suite **142 → 150**). (Metric-aware caret/select
+      paint + per-glyph hit positioning + font family/weight deferred — additive
+      on the same seam.)
 
 ### Widgets (after foundation + layout)
 

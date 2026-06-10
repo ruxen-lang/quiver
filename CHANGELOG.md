@@ -19,6 +19,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flat-merge-of-FFI-dependency link gap as a ruxen Q-candidate.
 
 ### Added
+- **Real text metrics via an injected measure seam** (the last Layout roadmap
+  item). `App.set_measure({ |text, size| Int })` lets a shell binary inject true
+  advance widths (canvas's Skia `measure_text_sized`); quiver stays canvas-free
+  and calls *through* the seam. `arrange`'s flat pre-pass routes leaf-text and
+  checkbox-label widths through one `text_width` helper — the injected metric
+  when set, else the char-metric estimate, so headless/tests/Skia-less examples
+  are byte-identical (the `app.rx`/`counter.rx` width pins are untouched). The
+  closure lives in a 0-or-1-entry pool + presence flag (not an `Option[any Fn]`
+  field — ruxen Q2). Measurement stays **once per leaf per `arrange`** (a
+  `dyn_text` change re-measures on flush because flush re-`arrange`s; static text
+  never re-measures per frame) — pinned by an invocation-count double. New
+  `text_size()` layout constant + `App.measuring?` introspection. All three
+  examples (counter, todo, settings) inject `measure_text_sized` on their
+  windowed path; headless keeps char metrics. ADR:
+  `docs/decisions/text-metrics-seam.md`; pinned by `tests/text_metrics.rx`
+  (+8 tests; suite **142 → 150**, additive).
 - **Direct public-API unit tests (ruxen Q16 unblocked).** `ruxen test` now
   compiles tests against the package's own + dependency symbols, so previously
   binary-only behavior is pinned directly. Three new headless files

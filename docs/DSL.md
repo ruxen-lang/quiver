@@ -446,6 +446,32 @@ and **`KeyDown` is control-only** (real platform keycodes for Backspace/Delete/
 arrows/Home/End, passed straight through — no remapping). Keep a `_ -> nil`
 catch-all so new event variants don't break the match.
 
+### Real text metrics (the injected measure seam)
+
+quiver sizes text by a **char-metric estimate** (`char_width()` px per char) by
+default. A shell with a real text engine injects **true advance widths** through
+a seam — quiver never imports the engine (it is canvas-free by charter; see
+`docs/decisions/text-metrics-seam.md`):
+
+```
+app.set_measure({ |text, size| canvas.measure_text_sized(text, size as Float32) })
+```
+
+- The closure takes the display string + quiver's slice font size (`text_size()`)
+  and returns the advance width in px. `arrange` routes leaf-text and checkbox-
+  label widths through it (the box widths of input/slider/select are fixed at
+  build time and unaffected).
+- **The default is the char-metric estimate.** With no measure injected,
+  geometry is byte-identical to before — so headless runs, the test suite, and a
+  Skia-less example all behave the same (no `Err`, no behavioural cliff).
+  `app.measuring?` reports whether a measure fn is set.
+- The seam is wired **in the shell binary** — the only place quiver (L2) and the
+  engine (L1) symbols meet. All three examples inject it on their windowed path
+  (plain capture of the window handle; **not** `move`) and skip it headless.
+- Measurement stays **once per leaf per `arrange`** (the flat pre-pass property);
+  a `dyn_text` whose text changes re-measures because `flush` re-`arrange`s, but
+  static text never re-measures per frame. Pinned by `tests/text_metrics.rx`.
+
 ### Reactivity model: content + (opt-in) structure
 
 quiver reacts on **content** by default: a state change re-runs exactly the

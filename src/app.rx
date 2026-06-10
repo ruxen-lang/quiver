@@ -13,6 +13,10 @@ def row_height -> Int { 24 }
 def char_width -> Int { 8 }
 def pad_x -> Int { 4 }
 def baseline_drop -> Int { 16 }
+## Logical font size (px) quiver renders text at for this slice — one font for
+## the whole slice. Passed to an injected real-metrics measure fn so its advance
+## width matches what the shell actually paints (canvas's Skia text at this size).
+def text_size -> Int { 16 }
 ## Checkbox box side (a square, smaller than the row so it sits inset).
 def check_box_size -> Int { 16 }
 ## Slider thumb side (a square) and track bar height. The track is inset by
@@ -77,6 +81,15 @@ class App
   ## for width-aware layout + correct viewport math as it grows.
   design_w: Int
   design_h: Int
+  ## Injected text-metric seam (docs/decisions/text-metrics-seam.md). A measure
+  ## closure `{ |text, size| Int }` the SHELL BINARY supplies via `set_measure`
+  ## to give real (Skia advance) widths; quiver stays canvas-free, so it never
+  ## imports the metric — it calls through this seam. Stored in a 0-or-1-entry
+  ## POOL + a presence flag, NOT an `Option[any Fn]` field (that stores garbage
+  ## in ruxen v1 — same landmine the compute/handler pools sidestep). Absent ⇒
+  ## char-metric fallback, so headless/tests/examples-without-Skia are identical.
+  measure_fns: Array[any Fn[Fn(String, Int) -> Int]]
+  has_measure: Bool
 
   def init
     self.ui = Ui.new
@@ -100,6 +113,8 @@ class App
     self.hovered = false
     self.design_w = 0
     self.design_h = 0
+    self.measure_fns = Array.new
+    self.has_measure = false
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -763,6 +778,31 @@ class App
     self.arrange
   end
 
+  ## Inject the real text-metric seam (docs/decisions/text-metrics-seam.md). The
+  ## shell binary — the only place quiver (L2) and canvas (L1) symbols meet —
+  ## passes a closure `{ |text, size| Int }` that returns the true advance width
+  ## (px) of `text` at logical font size `size`; quiver then sizes text leaves and
+  ## checkbox labels by it instead of the char-metric estimate. Stored in a
+  ## 0-or-1-entry pool + a presence flag (not an `Option[Fn]` field — ruxen Q2).
+  ## Re-lays-out immediately so existing geometry reflects the real metrics.
+  ##
+  ##   app.set_measure({ |t, s| canvas.measure_text_sized(t, s as Float32) })
+  ##
+  ## With no measure ever set, layout uses the char-metric fallback — headless,
+  ## the test suite, and Skia-less examples behave identically (no Err).
+  def var set_measure(f: any Fn[Fn(String, Int) -> Int]) -> nil
+    self.measure_fns = Array.new
+    self.measure_fns.push(f)
+    self.has_measure = true
+    self.arrange
+  end
+
+  ## Whether a real-metric measure fn has been injected (else char-metric
+  ## fallback). Exposed so a test/double can assert the seam is (un)set.
+  def measuring? -> Bool
+    self.has_measure
+  end
+
   ## Current design (logical) width / height, as last set by `resize`.
   def design_width -> Int
     self.design_w
@@ -790,18 +830,34 @@ class App
     offset
   end
 
-  ## Text width of a leaf node (char-metric estimate until Skia metrics land).
-  def leaf_w(i: Int) -> Int
-    let label = self.text_of(i)
-    (label.size as Int) * char_width() + pad_x() * 2
+  ## Advance width (px) of `s` at the slice font size: the injected real-metric
+  ## seam when one is set, else the char-metric estimate. The ONE place text
+  ## width is resolved — `leaf_w`/`checkbox_w` both go through it, so swapping
+  ## metrics in (or out) is a single decision point. `arrange`'s flat pre-pass is
+  ## still the only caller path during layout, so each leaf is measured once.
+  def text_width(s: String) -> Int
+    if self.has_measure
+      match self.measure_fns.get(0)
+        Some(f) -> return f.(s.clone, text_size())
+        nil     -> nil
+      end
+    end
+    (s.size as Int) * char_width()
   end
 
-  ## Width of a checkbox: leading pad + box + gap + label width + trailing pad.
+  ## Text width of a leaf node: measured text + horizontal padding. Uses the
+  ## injected real metrics when present, else the char-metric estimate.
+  def leaf_w(i: Int) -> Int
+    let label = self.text_of(i)
+    self.text_width(label) + pad_x() * 2
+  end
+
+  ## Width of a checkbox: leading pad + box + gap + measured label + trailing pad.
   ## (The label is the static `label_at`; checkbox computes hold a sentinel, not
   ## the display text, so read the label directly.)
   def checkbox_w(i: Int) -> Int
     let label = self.root.label_at(i)
-    let label_w = (label.size as Int) * char_width()
+    let label_w = self.text_width(label)
     pad_x() + check_box_size() + pad_x() + label_w + pad_x()
   end
 

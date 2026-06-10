@@ -123,7 +123,14 @@ def drive(win0: Window) -> nil
     return
   end
 
-  # -- Windowed: first frame, then the live event loop --
+  # -- Windowed: inject real text metrics, then paint the first frame + loop --
+  # The binary is the only place quiver (L2) and canvas (L1) symbols meet, so the
+  # measure seam is wired HERE (quiver stays canvas-free). Plain capture of `win`
+  # (not `move` — non-Copy class) is sound today; the closure asks canvas for the
+  # true advance width at quiver's slice font size. Headless skips this entirely,
+  # so the char-metric fallback drives CI.
+  app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
+
   paint_all(&app, &var surface)
   blit(&var win, &surface)
 
