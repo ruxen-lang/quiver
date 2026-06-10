@@ -2,9 +2,16 @@
 ## quiver app" tutorial. Read state.rx (model) and views.rx (UI) alongside this.
 ##
 ## This is a binary package: the only place ruxen v1 lets quiver (L2) and canvas
-## (L1) symbols meet, so the canvas-facing shell (window + event loop + the
-## paint replay) lives HERE, never in quiver's `src/`. quiver paints into a
-## platform-free `RecordingSurface`; `replay` issues the matching Skia calls.
+## (L1) symbols meet, so the canvas-facing shell (window + event loop + the paint
+## backend) lives HERE, never in quiver's `src/`.
+##
+## The windowed path uses a DIRECT paint backend: `SkiaPaint` is the binary's own
+## `PaintSurface` implementor (ruxen Q17 lets quiver's generic paint pass
+## monomorphize against a consumer-defined implementor), so quiver's paint pass
+## issues Skia calls as it visits each node — one walk, no recorded mirror. The
+## headless path still paints into quiver's platform-free `RecordingSurface` and
+## narrates, so CI / no-display runs exercise the same pipeline.
+## See docs/decisions/direct-paint-backend.md.
 ##
 ## With a display it opens a live OS window driven by the real event stream;
 ## headless (CI / no display) it falls back to synthetic events through the SAME
@@ -52,7 +59,6 @@ end
 def drive(win0: Window) -> nil
   var win = win0
   var app = build_app
-  var surface = RecordingSurface.new
 
   let shown = match win.show_gpu_scaled(2)
     Ok(_)  -> true
@@ -60,11 +66,12 @@ def drive(win0: Window) -> nil
   end
 
   if !shown
+    var surface = RecordingSurface.new
     run_headless(&var app, &var surface)
     return
   end
 
-  run_windowed(&var win, &var app, &var surface)
+  run_windowed(&var win, &var app)
 end
 
 ## Headless demo: paint the first frame, then drive a few synthetic edits and
@@ -119,8 +126,9 @@ def run_headless(app: &var App, surface: &var RecordingSurface) -> nil
 end
 
 ## The live event loop: forward real pointer + key events into App's dispatch,
-## then flush + repaint only when something changed.
-def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface) -> nil
+## then flush + repaint only when something changed. Painting is DIRECT — quiver's
+## paint pass drives `SkiaPaint` straight onto canvas; no recorded mirror.
+def run_windowed(win: &var Window, app: &var App) -> nil
   # Inject real text metrics through quiver's measure seam (the binary is the
   # only place quiver L2 + canvas L1 symbols meet; quiver itself stays canvas-
   # free). Plain capture of `win` (non-Copy class — not `move`) is sound today;
@@ -128,8 +136,7 @@ def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface
   # The headless path (run_headless) never injects, so it keeps char metrics.
   app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
 
-  paint_all(app, surface)
-  blit(win, surface)
+  paint_frame(win, app)
 
   var running = true
   while running
@@ -151,9 +158,7 @@ def run_windowed(win: &var Window, app: &var App, surface: &var RecordingSurface
     end
     let dirty = app.flush
     if (dirty.size as Int) > 0
-      surface.reset
-      paint_all(app, surface)
-      blit(win, surface)
+      paint_frame(win, app)
     end
     win.sleep_ms(16)
   end
@@ -197,56 +202,73 @@ def find_kind(app: &var App, kind: Int, nth: Int) -> Int
   -1
 end
 
-## Replay quiver's recorded paint commands onto a real canvas (the L2->L1 seam).
-def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
-  var i = 0
-  let n = surface.size
-  while i < n
-    let op = surface.op_at(i)
-    let col = Color.rgb(surface.r_at(i) as UInt8, surface.g_at(i) as UInt8, surface.b_at(i) as UInt8)
-    if op == op_clear()
-      let _ = canvas.clear(col)
-    elsif op == op_rect()
-      let rect = Rect.new(
-        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
-        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
-      let _ = canvas.draw_rect(rect, col)
-    elsif op == op_round_rect()
-      let rect = Rect.new(
-        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
-        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
-      let _ = canvas.draw_round_rect(rect, surface.rad_at(i) as Float32, col)
-    elsif op == op_stroke_rect()
-      let rect = Rect.new(
-        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
-        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
-      let _ = canvas.stroke_round_rect(rect, surface.rad_at(i) as Float32, surface.sw_at(i) as Float32, col)
-    elsif op == op_save()
-      let _ = canvas.save
-    elsif op == op_clip()
-      let rect = Rect.new(
-        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
-        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
-      let _ = canvas.clip_rect(rect)
-    elsif op == op_translate()
-      let _ = canvas.translate(surface.x_at(i) as Float32, surface.y_at(i) as Float32)
-    elsif op == op_restore()
-      let _ = canvas.restore
-    else
-      let label = surface.text_at(i)
-      let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)
-    end
-    i = i + 1
+## SkiaPaint — this binary's DIRECT `PaintSurface` implementor (ruxen Q17). quiver's
+## generic paint pass (`paint_all`/`paint_dirty`) monomorphizes against it and calls
+## these methods as it visits each node, issuing canvas/Skia draws on the spot — no
+## recorded mirror, one walk. It holds a borrow of the live `Canvas` for the frame
+## (constructed inside the begin/end bracket in `paint_frame`). Each method is the
+## op→canvas mapping that used to live in `replay`, transliterated 1:1.
+class SkiaPaint
+  include PaintSurface
+  canvas: &var Canvas
+
+  def init(canvas: &var Canvas)
+    self.canvas = canvas
+  end
+
+  def var fill_clear(r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let _ = self.canvas.clear(col)
+  end
+
+  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_rect(rect, col)
+  end
+
+  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let label = text.clone
+    let _ = self.canvas.draw_text(label, x as Float32, y as Float32, col)
+  end
+
+  def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_round_rect(rect, radius as Float32, col)
+  end
+
+  def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.stroke_round_rect(rect, radius as Float32, width as Float32, col)
+  end
+
+  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+    let _ = self.canvas.save
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.clip_rect(rect)
+  end
+
+  def var push_translate(dx: Int, dy: Int) -> nil
+    let _ = self.canvas.translate(dx as Float32, dy as Float32)
+  end
+
+  def var pop_state -> nil
+    let _ = self.canvas.restore
   end
 end
 
-## Draw the recorded frame to the OS window.
-def blit(win: &var Window, surface: &RecordingSurface) -> nil
+## Paint one frame DIRECTLY to the OS window: open a frame, drive quiver's paint
+## pass through `SkiaPaint` (which issues the Skia calls as it walks), end + present.
+def paint_frame(win: &var Window, app: &var App) -> nil
   match win.canvas.begin_frame
     Ok(_)  -> nil
     Err(e) -> puts "begin_frame: #{e}"
   end
-  replay(surface, &var win.canvas)
+  var skia = SkiaPaint.new(&var win.canvas)
+  paint_all(app, &var skia)
   let _ = win.canvas.end_frame
   let _ = win.present
 end

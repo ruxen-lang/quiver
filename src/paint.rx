@@ -3,9 +3,12 @@
 ## quiver paints through the `PaintSurface` mixin — a primitives-only
 ## boundary (Ints + &String) so that:
 ##   - tests paint headlessly onto a `RecordingSurface`, and
-##   - the desktop shell adapts it to canvas's Skia `Canvas` in the app
-##     binary (library builds can't see dependency symbols in ruxen v1,
-##     so the canvas adapter lives with the example app, not here).
+##   - the desktop shell paints DIRECTLY onto canvas's Skia `Canvas` via its
+##     own `SkiaPaint` implementor in the app binary (ruxen Q17 monomorphizes
+##     quiver's generic paint pass against a consumer-defined implementor;
+##     library builds still can't see dependency symbols, so the canvas-facing
+##     implementor lives with the example app, not here).
+##     See docs/decisions/direct-paint-backend.md.
 ##
 ## Colors are 0-255 RGB Ints. Coordinates are device-independent pixels.
 
@@ -48,18 +51,21 @@ def op_clip -> Int { 6 }
 def op_translate -> Int { 7 }
 def op_restore -> Int { 8 }
 
-## The one concrete PaintSurface. It records every primitive twice over:
+## quiver's in-package PaintSurface implementor and headless test double. It
+## records every primitive twice over:
 ##   - as a formatted STRING (`command_at` — the headless double the test
 ##     suite pins), and
 ##   - as STRUCTURED numeric fields in parallel arrays (`op_at`/`x_at`/… —
-##     the bridge a real backend replays onto canvas's Skia `Canvas`).
+##     a structured mirror a backend can read back).
 ##
-## One surface, not two, on purpose: ruxen v1 only resolves quiver's generic
-## paint pass (`paint_all`/`paint_dirty`) when `PaintSurface` has a SINGLE
-## implementor — it devirtualises the call rather than truly monomorphising,
-## so a second impl makes the generic body emit an unresolved
-## `S: PaintSurface_*` symbol that fails to link. An app binary therefore
-## drives THIS type and reads the structured fields back to paint the window.
+## This is NOT the only PaintSurface anymore. ruxen Q17 lets a generic free fn
+## bounded by a mixin (`paint_all[S: PaintSurface]`) monomorphize per concrete
+## implementor — including one defined in a CONSUMING binary. So each windowed
+## example defines its OWN `SkiaPaint` implementor that issues Skia calls
+## DIRECTLY as the paint pass visits each node (one walk, no recorded mirror —
+## see docs/decisions/direct-paint-backend.md). `RecordingSurface` stays as the
+## headless path + the suite's test double; `tests/multi_backend.rx` pins that
+## the paint pass drives a SECOND implementor identically, canvas-free.
 ## Stays 100% canvas-free: only Ints and Strings cross this boundary.
 class RecordingSurface
   include PaintSurface
