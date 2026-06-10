@@ -135,8 +135,8 @@ Each setter returns the `Style` for chaining; unset fields draw nothing
   `stroke_round_rect` at its full box (each only if set), *before* its children
   — which paint later in tree order, so leaves land on top. Two display-list
   ops (`op_round_rect` / `op_stroke_rect`) carry a corner radius and (for the
-  stroke) a width; the example binary replays them onto canvas's
-  `draw_round_rect` / `stroke_round_rect`.
+  stroke) a width; the example binary's `PaintSurface` backend maps them onto
+  canvas's `draw_round_rect` / `stroke_round_rect`.
 
 Style lives in parallel `Int` hashes on `Col` (the same flat-arena discipline
 as the tree links; absent ⇒ unstyled), not a recursive/`Option`-typed field.
@@ -176,8 +176,9 @@ root.list(96, { |c|               # 96px viewport
   old flat id loop for un-nested trees — the pins prove it). A list wraps its
   children in `push_clip(viewport)` + `push_translate(0, -offset)` and a closing
   `pop_state` — display-list ops `op_save` / `op_clip` / `op_translate` /
-  `op_restore`, replayed onto canvas `save` / `clip_rect` / `translate` /
-  `restore`. Off-viewport children still record, but the clip masks them.
+  `op_restore`, mapped onto canvas `save` / `clip_rect` / `translate` /
+  `restore` by the binary's `PaintSurface` backend. Off-viewport children still
+  visit the surface, but the clip masks them.
 - **Scroll input.** A windowed shell forwards canvas's `Event.Scroll(dx, dy)`
   (mouse wheel) to `app.scroll(dx, dy)`, which routes the wheel to the innermost
   scrollable list under the last hovered point (`pointer_move` records the
@@ -419,10 +420,14 @@ The patterns it teaches:
 - **RMW is a single `update`.** Editing state goes through one
   `state.update(ui, { |v| … })` / `set` — never `peek` then `set` (two locks per
   frame on the same mutex corrupt the value). The widgets do this for you.
-- **The shell stays in the binary.** The window + event loop + paint `replay`
-  (the canvas-facing glue) live in the example's `main.rx`; quiver itself is
-  platform-free. Forward canvas events into `App`'s dispatch (see below); flush
-  + repaint only when the dirty set is non-empty.
+- **The shell stays in the binary.** The window + event loop + the canvas-facing
+  paint backend live in the example's `main.rx`; quiver itself is platform-free.
+  The windowed path defines its OWN `PaintSurface` implementor (`SkiaPaint`) that
+  quiver's generic paint pass drives DIRECTLY onto canvas — no recorded mirror,
+  one walk per frame (ruxen Q17; see docs/decisions/direct-paint-backend.md). The
+  headless path keeps painting into `RecordingSurface` and narrating, so CI /
+  no-display runs exercise the same pipeline. Forward canvas events into `App`'s
+  dispatch (see below); flush + repaint only when the dirty set is non-empty.
 
 ### Windowed event contract
 

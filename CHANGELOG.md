@@ -7,6 +7,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **Direct-paint backend: dropped the single-`PaintSurface` workaround (ruxen
+  Q17).** quiver's generic paint pass (`paint_all`/`paint_dirty`,
+  `def …[S: PaintSurface]`) now monomorphizes against a `PaintSurface`
+  implementor defined in the *consuming* binary, so each windowed example
+  defines its own `SkiaPaint` implementor that issues canvas/Skia calls DIRECTLY
+  as the pass visits each node. The per-frame record→`reset`→`replay` double pass
+  is gone on the windowed hot loop (one paint walk instead of walk+record+rewalk;
+  no per-frame op-array allocation). `RecordingSurface` is unchanged and stays as
+  the headless example path + the test suite's double — both backends coexist in
+  each binary. No change to `src/paint.rx`'s generic pass was needed (audited: it
+  was already correctly `[S: PaintSurface]` throughout); only the obsolete
+  single-impl doc comments changed. New canvas-free pin `tests/multi_backend.rx`
+  drives a SECOND in-test implementor (`TallySurface`) through the SAME pass as
+  `RecordingSurface` and asserts identical per-op streams (incl. `paint_dirty`),
+  locking in "the framework drives N paint backends". Suite **150 → 153**
+  (additive); `examples/{counter,settings,todo}` all build and run windowed via
+  `SkiaPaint`. ADR: `docs/decisions/direct-paint-backend.md`.
 - **quiver no longer declares `canvas` as a library dependency — it is now
   platform-agnostic at the manifest level.** quiver's `src/`/`tests/` never
   referenced a canvas symbol (paint crosses the boundary as plain Ints/Strings);

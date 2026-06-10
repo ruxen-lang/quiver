@@ -37,13 +37,13 @@ Now that `canvas` Milestone 1 has landed (live SDL2 window + Skia surface +
 event stream), `examples/counter` runs as a real windowed app:
 
 - **Structured paint recording** — `RecordingSurface` records each primitive
-  both as a string (test double) and as numeric fields (`op_at`/`x_at`/…).
-  The app binary `replay`s those onto canvas's Skia `Canvas`. The bridge is a
-  single `PaintSurface` impl on purpose: ruxen v1 only resolves quiver's
-  generic paint pass when the mixin has one implementor (it devirtualises
-  rather than monomorphising), and it cannot monomorphise a dependency's
-  generic for a type defined in the consuming app — so the structured surface
-  lives in quiver and the canvas glue lives in the binary.
+  both as a string (test double) and as numeric fields (`op_at`/`x_at`/…). It
+  remains the headless path + the suite's test double. (Originally the app
+  binary `replay`ed those onto canvas's Skia `Canvas` because ruxen v1 resolved
+  quiver's generic paint pass only against a single implementor. **ruxen Q17
+  removed that limit** — see "Drop the single-`PaintSurface` workaround" below:
+  each windowed example now defines its own `SkiaPaint` implementor and paints
+  DIRECTLY onto canvas, no record→replay double pass.)
 - **Live event loop** — `examples/counter` opens a scaled OS window, paints
   the first frame, and drives repaint from the real `poll_event` stream
   (`PointerDown` → dispatch → flush → repaint; `CloseRequested` → quit). It
@@ -195,8 +195,23 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       *"sound today because drops don't run yet."* Long-lived widget trees need
       deterministic teardown. **→ ruxen P0.2** (Drop elaboration discarded by
       both backends).
-- [ ] **Drop the single-`PaintSurface` workaround** — multiple paint backends
-      need cross-package generic monomorphization. **→ ruxen Q17.**
+- [x] **Drop the single-`PaintSurface` workaround** (**ruxen Q17 landed**) —
+      quiver's generic paint pass (`paint_all`/`paint_dirty`,
+      `def …[S: PaintSurface]`) now monomorphizes against an implementor defined
+      in the *consuming* binary. Each windowed example defines its own `SkiaPaint`
+      implementor that issues Skia calls DIRECTLY as the pass visits each node;
+      the per-frame record→`reset`→`replay` double pass is gone on the windowed
+      path (one paint walk instead of walk+record+rewalk). `RecordingSurface`
+      stays as the headless path + the suite's test double; both backends coexist
+      in each binary. A canvas-free pin (`tests/multi_backend.rx`) drives a SECOND
+      in-test implementor (`TallySurface`) through the SAME pass as
+      `RecordingSurface` and asserts identical per-op streams — locking in "the
+      framework drives N paint backends" forever. ADR:
+      `docs/decisions/direct-paint-backend.md`. Suite **150 → 153** (additive);
+      all three examples build. (Audited `src/paint.rx`'s generic pass for a
+      single-impl assumption — none found; every paint fn was already
+      `[S: PaintSurface]`. Only the now-obsolete single-impl doc comments
+      changed.)
 - [x] **Unit-test quiver's public API directly** (**ruxen Q16 fixed**) — `ruxen
       test` now compiles tests against the package's own + dependency symbols
       (library/`check`/`test` flat-merge dependency sources; verified by
