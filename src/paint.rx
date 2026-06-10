@@ -105,12 +105,12 @@ class RecordingSurface
 
   def var fill_clear(r: Int, g: Int, b: Int) -> nil
     self.commands.push("clear(#{r},#{g},#{b})")
-    self.record(op_clear(), 0, 0, 0, 0, r, g, b, String.from(""))
+    self.record(op_clear(), 0, 0, 0, 0, r, g, b, "")
   end
 
   def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
     self.commands.push("rect(#{x},#{y},#{w},#{h},#{r},#{g},#{b})")
-    self.record(op_rect(), x, y, w, h, r, g, b, String.from(""))
+    self.record(op_rect(), x, y, w, h, r, g, b, "")
   end
 
   def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
@@ -120,29 +120,29 @@ class RecordingSurface
 
   def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
     self.commands.push("round_rect(#{x},#{y},#{w},#{h},#{radius},#{r},#{g},#{b})")
-    self.record2(op_round_rect(), x, y, w, h, r, g, b, radius, 0, String.from(""))
+    self.record2(op_round_rect(), x, y, w, h, r, g, b, radius, 0, "")
   end
 
   def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
     self.commands.push("stroke_rect(#{x},#{y},#{w},#{h},#{radius},#{width},#{r},#{g},#{b})")
-    self.record2(op_stroke_rect(), x, y, w, h, r, g, b, radius, width, String.from(""))
+    self.record2(op_stroke_rect(), x, y, w, h, r, g, b, radius, width, "")
   end
 
   def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
     self.commands.push("save")
-    self.record(op_save(), 0, 0, 0, 0, 0, 0, 0, String.from(""))
+    self.record(op_save(), 0, 0, 0, 0, 0, 0, 0, "")
     self.commands.push("clip(#{x},#{y},#{w},#{h})")
-    self.record(op_clip(), x, y, w, h, 0, 0, 0, String.from(""))
+    self.record(op_clip(), x, y, w, h, 0, 0, 0, "")
   end
 
   def var push_translate(dx: Int, dy: Int) -> nil
     self.commands.push("translate(#{dx},#{dy})")
-    self.record(op_translate(), dx, dy, 0, 0, 0, 0, 0, String.from(""))
+    self.record(op_translate(), dx, dy, 0, 0, 0, 0, 0, "")
   end
 
   def var pop_state -> nil
     self.commands.push("restore")
-    self.record(op_restore(), 0, 0, 0, 0, 0, 0, 0, String.from(""))
+    self.record(op_restore(), 0, 0, 0, 0, 0, 0, 0, "")
   end
 
   def size -> Int
@@ -152,7 +152,7 @@ class RecordingSurface
   def command_at(i: Int) -> String
     match self.commands.get(i)
       Some(s) -> s.clone
-      nil     -> String.from("")
+      nil     -> ""
     end
   end
 
@@ -219,7 +219,7 @@ class RecordingSurface
   def text_at(i: Int) -> String
     match self.texts.get(i)
       Some(s) -> s.clone
-      nil     -> String.from("")
+      nil     -> ""
     end
   end
 
@@ -296,7 +296,7 @@ def paint_select[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   surface.fill_round_rect(x, y, w, app.h_of(i), 0, 235, 235, 235)
   let label = app.select_text(i)
   surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
-  let arrow = String.from("v")
+  let arrow = "v"
   surface.draw_text(&arrow, x + w - char_width() - pad_x(), y + baseline_drop(), 20, 20, 20)
 end
 

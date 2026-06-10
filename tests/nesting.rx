@@ -22,10 +22,10 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
   t.it("row() builds a container node that owns the nodes built inside it") do
     var col = Col.new
     col.text("title")                                  # node 0 (root)
-    col.row({ |c: &var Col|                             # node 1 (root container)
+    col.row do |c: &var Col|                            # node 1 (root container)
       c.text("left")                                    # node 2 (child of 1)
       c.text("right")                                   # node 3 (child of 1)
-    })
+    end
     t.expect(col.size).to_eq(4)
     t.expect(col.kind_at(1)).to_eq(kind_row())
     # the container is a root; its children point back to it
@@ -44,13 +44,13 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
 
   t.it("nesting is arbitrary: a col() inside a row() inside the root") do
     var col = Col.new
-    col.row({ |c: &var Col|                # 0 row
+    col.row do |c: &var Col|               # 0 row
       c.text("x")                          # 1 child of 0
-      c.col({ |c2: &var Col|               # 2 col, child of 0
+      c.col do |c2: &var Col|              # 2 col, child of 0
         c.text("y")                        # 3 child of 2
         c.text("z")                        # 4 child of 2
-      })
-    })
+      end
+    end
     t.expect(col.size).to_eq(5)
     t.expect(col.kind_at(0)).to_eq(kind_row())
     t.expect(col.kind_at(2)).to_eq(kind_col())
@@ -76,9 +76,9 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
   t.it("a dyn_text child records its compute slot and links like any node") do
     var col = Col.new
     col.text("title")                                   # node 0
-    col.row({ |c: &var Col|                              # node 1
-      c.dyn_text({ |ui2: &var Ui| String.from("x") })    # node 2 (child of 1)
-    })
+    col.row do |c: &var Col|                             # node 1
+      c.dyn_text({ |ui2: &var Ui| "x" })    # node 2 (child of 1)
+    end
     # the dyn_text child is a normal arena node: kind, compute slot, links
     t.expect(col.kind_at(2)).to_eq(kind_dyn_text())
     t.expect(col.compute_at(2)).to_eq(0)                 # first compute slot
@@ -93,16 +93,16 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
     var ui = Ui.new
     let count = ui.state(7)
     var col = Col.new
-    col.row({ |c: &var Col|
+    col.row do |c: &var Col|
       c.dyn_text({ |ui2: &var Ui| "n: #{count.get(ui2)}" })
-    })
+    end
     ui.current_scope = 1
     let out = match col.computes.get(0)
       Some(f) -> f.(&var ui)
-      nil     -> String.from("missing")
+      nil     -> "missing"
     end
     ui.current_scope = -1
-    t.expect(out).to_eq(String.from("n: 7"))
+    t.expect(out).to_eq("n: 7")
     t.expect(ui.subs.size as Int).to_eq(1)
   end
 
@@ -110,20 +110,20 @@ Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
     var app = App.build({ |ui: &var Ui, root: &var Col|
       let count = ui.state(0)
       root.text("title")                                              # 0
-      root.row({ |c: &var Col|                                        # 1
+      root.row do |c: &var Col|                                       # 1
         c.dyn_text({ |ui2: &var Ui| "n: #{count.get(ui2)}" })         # 2
         c.button("tap", { |ui2: &var Ui| count.update(ui2, { |x| x + 1 }) }) # 3
-      })
+      end
     })
     # mount rendered the reactive child against live state
-    t.expect(app.text_of(2)).to_eq(String.from("n: 0"))
+    t.expect(app.text_of(2)).to_eq("n: 0")
     # clicking the button child mutates state; flush refreshes ONLY the
     # subscribed dyn_text child (node 2), not the static title or the button
     app.click(3)
     let refreshed = app.flush
     t.expect(refreshed.size as Int).to_eq(1)
     ArrayMatcher.new(&refreshed).to_include(2)
-    t.expect(app.text_of(2)).to_eq(String.from("n: 1"))
-    t.expect(app.text_of(0)).to_eq(String.from("title"))
+    t.expect(app.text_of(2)).to_eq("n: 1")
+    t.expect(app.text_of(0)).to_eq("title")
   end
 end

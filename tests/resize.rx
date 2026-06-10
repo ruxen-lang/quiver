@@ -10,15 +10,15 @@ Tester.describe("resize — design size + stable re-layout") do |t: &var Tester|
     App.build({ |ui: &var Ui, root: &var Col|
       let count = ui.state(0)
       root.text("Header")                         # node 0
-      root.row({ |c|
+      root.row do |c: &var Col|
         c.text("L")                               # node 2
         c.dyn_text({ |ui2| "n=#{count.get(ui2)}" }) # node 3
-      })                                           # row = node 1
-      root.list(row_height() * 2, { |c|
+      end                                          # row = node 1
+      root.list(row_height() * 2) do |c: &var Col|
         c.text("row a")                            # node 5
         c.text("row b")                            # node 6
         c.text("row c")                            # node 7 (overflows)
-      })                                           # list = node 4
+      end                                          # list = node 4
       root.button("tap", { |ui2| count.update(ui2, { |x| x + 1 }) }) # node 8
     })
   }
@@ -71,14 +71,14 @@ Tester.describe("resize — design size + stable re-layout") do |t: &var Tester|
     var app = app_with.()
     app.click(8)                                  # bump count -> n=1
     app.flush
-    t.expect(app.text_of(3)).to_eq(String.from("n=1"))
+    t.expect(app.text_of(3)).to_eq("n=1")
     app.resize(900, 700)
     # resize re-arranges geometry only; the cached reactive text is untouched
-    t.expect(app.text_of(3)).to_eq(String.from("n=1"))
+    t.expect(app.text_of(3)).to_eq("n=1")
     # and the reactive path still works after a resize
     app.click(8)
     app.flush
-    t.expect(app.text_of(3)).to_eq(String.from("n=2"))
+    t.expect(app.text_of(3)).to_eq("n=2")
   end
 
   t.it("hit-testing still works after a resize") do

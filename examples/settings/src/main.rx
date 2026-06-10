@@ -48,7 +48,7 @@ def main
   puts "quiver settings panel — multi-file example"
   let w = 320
   let h = 360
-  match Window.open(String.from("Settings"), w, h)
+  match Window.open("Settings", w, h)
     Ok(win) -> drive(win)
     Err(e)  -> puts "cannot create canvas: #{e}"
   end

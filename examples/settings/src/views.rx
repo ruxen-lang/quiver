@@ -9,8 +9,17 @@
 ## it by reference (`&State[T]`) and derefs to a LOCAL (`let v = *vol`) that the
 ## stored closures capture (a cheap pointer-copy of the shared cell — every copy
 ## observes the same value). Never pass the same handle by value to two builders
-## — that moves it. Stored closures always use `{ |x| … }` braces (never
-## `do…end`, which segfaults to a free function in ruxen v1).
+## — that moves it.
+##
+## The block idiom (docs/DSL.md "Blocks & the do/brace idiom"):
+##   - Container builders (`row`/`col`/`row_styled`/`col_styled`/`list`) take an
+##     IMMEDIATELY-INVOKED block, written `do |c: &var Col| … end`. The `c`
+##     param is typed `&var Col` (the v1 toolchain does not infer a block
+##     param's type through the `&block`/`yield` seam). `do…end` reads as
+##     STRUCTURE.
+##   - Stored callbacks (`dyn_text`, `button` handlers) keep the `{ |x| … }`
+##     brace form — braces read as a stored BEHAVIOUR/value. That visual split
+##     (do…end = structure, braces = stored behaviour) is the house style.
 
 ## A small reusable style for the panel cards: padding, light background, a
 ## subtle border, rounded corners. `Style` is a plain value built with chainable
@@ -43,10 +52,10 @@ def name_field(root: &var Col, name: &State[String]) -> nil
   # build (see the example README / tmp/test-cache repro) — `let`-binding first
   # is the (idiomatic) fix, used throughout this app.
   let style = card_style
-  root.row_styled(style, { |c|
+  root.row_styled(style) do |c: &var Col|
     c.text("Name:")
     c.input(nm, 160)
-  })
+  end
 end
 
 ## The toggles: two `checkbox`es bound to Bool state. A click toggles the bool
@@ -62,11 +71,11 @@ def toggles(root: &var Col, notify: &State[Bool], dark: &State[Bool]) -> nil
   let nt_read = *notify
   let dk_read = *dark
   let style = card_style
-  root.col_styled(style, { |c|
+  root.col_styled(style) do |c: &var Col|
     c.checkbox(nt, "Email notifications")
     c.checkbox(dk, "Dark mode")
     c.dyn_text({ |ui| "notify=#{on_off(nt_read.get(ui))}, dark=#{on_off(dk_read.get(ui))}" })
-  })
+  end
 end
 
 ## The volume control: a `slider` over [0, 100] bound to `volume`, with a
@@ -76,10 +85,10 @@ def volume_control(root: &var Col, volume: &State[Int]) -> nil
   let vol_read = *volume     # captured by the read-out closure
   let vol = *volume          # consumed by the slider builder
   let style = card_style
-  root.col_styled(style, { |c|
+  root.col_styled(style) do |c: &var Col|
     c.dyn_text({ |ui| volume_label(vol_read.get(ui)) })
     c.slider(vol, 0, 100, 200)
-  })
+  end
 end
 
 ## The theme picker: a `select` (dropdown) over `theme_options`, bound to the
@@ -90,10 +99,10 @@ def theme_picker(root: &var Col, theme: &State[Int]) -> nil
   let th = *theme
   let style = card_style
   let options = theme_options       # let-bind the Array before the select call
-  root.row_styled(style, { |c|
+  root.row_styled(style) do |c: &var Col|
     c.text("Theme:")
     c.select(th, options, 160)
-  })
+  end
 end
 
 ## A scrollable `list` of devices. The list has a FIXED viewport height; if the
@@ -102,7 +111,7 @@ end
 ## quiver's builder runs once, so we build all of them here.
 def device_list(root: &var Col) -> nil
   let rows = device_rows
-  root.list(row_height() * 3, { |c|
+  root.list(row_height() * 3) do |c: &var Col|
     var i = 0
     let n = rows.size as Int
     while i < n
@@ -114,7 +123,7 @@ def device_list(root: &var Col) -> nil
       end
       i = i + 1
     end
-  })
+  end
 end
 
 ## The save bar: a `button` whose handler bumps a `saves` counter, plus a
@@ -123,8 +132,8 @@ end
 def save_bar(root: &var Col, saves: &State[Int]) -> nil
   let sv_click = *saves      # captured by the button handler
   let sv_read = *saves       # captured by the read-out closure
-  root.row({ |c|
+  root.row do |c: &var Col|
     c.button("Save", { |ui| sv_click.update(ui, { |v| v + 1 }) })
     c.dyn_text({ |ui| "saved #{sv_read.get(ui)}×" })
-  })
+  end
 end

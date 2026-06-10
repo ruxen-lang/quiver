@@ -27,12 +27,16 @@ var app = App.build({ |ui: &var Ui, root: &var Col|
 
 The **outer `App.build` block keeps its param types** (`{ |ui: &var Ui, root:
 &var Col| … }`) — that one block is the app's entry point and its types are not
-inferred today (a ruxen inference gap; see
-`docs/decisions/dsl-ergonomics.md`). Every **inner** stored-closure / container
-block, though, drops them — `{ |ui2| … }`, `{ |c| … }` — because ruxen infers
-the parameter type from the builder method's signature. Use the terse form for
-inner blocks; it reads as a plain Ruby block. (The annotated form still
-compiles, so existing code is unaffected.)
+inferred today (a ruxen inference gap; see `docs/decisions/dsl-ergonomics.md`).
+`App.build` stays an explicit-closure param (a `{ … }` literal), NOT a
+`&block`/`yield` builder, because its block takes two `&var` references and a
+two-`&var`-arg `yield` miscompiles on the v1 toolchain (CLAUDE.md, ruxen Q36).
+
+**Stored inner closures drop their types** — `{ |ui2| … }`, `{ |c| … }` — because
+ruxen infers a stored-closure param's type from the builder method's signature.
+But **immediately-invoked container blocks MUST type their param** (`row do |c:
+&var Col| … end`): a `&block` param's type does not infer through the
+`yield` seam (an untyped `do |c| … end` leaves `c` as `?T`). See the next section.
 
 - `App.build` runs the block **once**; `root` is the column under
   construction (a flat arena of nodes — see below).
@@ -50,10 +54,9 @@ Prototyping against ruxen v1 forced three changes, each pinned by a probe:
 
 1. **`text` vs `dyn_text` are separate methods.** Overloading one name on
    `&str` vs closure miscompiles (heap corruption) in ruxen v1.
-2. **Stored closures use `{ … }` braces, not `do … end`.** `do…end` blocks
-   passed to *free functions* with explicit closure parameters segfault;
-   methods accept them, but braces work everywhere and we use them
-   uniformly for stored callbacks.
+2. **Container builders take a `do…end` block; stored callbacks stay `{ … }`
+   braces.** See "Blocks & the do/brace idiom" below — this is now the house
+   style, not a workaround.
 3. **The tree is a flat arena** (parallel arrays in `Col`, node id = index),
    not a recursive `Widget` class: recursive class types crash the v1
    compiler, and `Option[any Fn]` fields miscompile. `-1` sentinels in
@@ -61,6 +64,86 @@ Prototyping against ruxen v1 forced three changes, each pinned by a probe:
 
 None of these changes the model — build once, `dyn_text` closures are the
 only things that ever re-run.
+
+## Blocks & the do/brace idiom
+
+quiver's DSL uses Ruxen's Ruby-block features (`&block` / `yield` /
+`block_defined?` / `alias` — see the ruxen tutorial
+`../ruxen/docs/tutorial/09-closures-and-blocks.md` and the ADRs
+`../ruxen/docs/decisions/{ruby-block-semantics,alias-keyword}.md`). The house
+rule is a single visual distinction:
+
+| Form | Means | Used for |
+|---|---|---|
+| `do …  end` | an **immediately-invoked** block (declared `&block`, run once via `yield`) — STRUCTURE | container builders: `row`, `col`, `list`, `row_styled`, `col_styled` |
+| `{ \|x\| … }` | a **stored** closure value — BEHAVIOUR kept and re-run later | `dyn_text`, `button` handlers, `set_measure`, `list_of`'s item builder, `State.update` |
+
+```ruxen
+root.row do |c: &var Col|                 # structure — immediately invoked
+  c.text("Name:")
+  c.button("Save", { |ui| saves.update(ui, { |v| v + 1 }) })  # stored handler
+end
+```
+
+### Which builders are `&block`/`yield`, and which stay stored closures
+
+- **`&block` + `yield` (immediately invoked, run ONCE during build):** `row`,
+  `col`, `list`, `row_styled`, `col_styled`. Each declares `&block: Fn[(&var Col)
+  -> nil]` and `yield(&var *self)` while its cursor is on the new container, then
+  restores the cursor. The block never outlives the build call, so a declared
+  block (not a stored closure) is exactly right.
+- **Stored closure params (kept and re-invoked later) — NOT `&block`:**
+  - `dyn_text` / `button` — their closures are stored in the `computes` /
+    `handlers` pools and re-run on every flush / click.
+  - `list_of`'s `item_builder` — stored in `item_builders` and re-invoked on
+    EVERY rebuild (each model mutation). A `&block` slot is for yield-time use;
+    storing a block is a different lifetime story, so this stays `{ |c, m, i| …
+    }`.
+  - `set_measure`'s measure fn — stored in a 0-or-1-entry pool.
+  - `App.build`'s entry block — an explicit closure param (two-`&var`-arg
+    `yield` miscompiles; ruxen Q36).
+
+### Two constraints the toolchain imposes
+
+1. **Type the block param.** `row do |c: &var Col| … end`, never `do |c| … end`
+   — a `&block` param's type does not infer through the `yield` seam (untyped ⇒
+   `c: ?T` ⇒ `no runtime symbol for ?T::text` at codegen). Typed works in both
+   `do…end` and `{ }` forms.
+2. **Blockless calls need parens.** `list`'s block is optional (below); call it
+   `root.list(h)` (with parens) when omitting the block — a paren-less blockless
+   method call doesn't fill the block slot in Tier 1.
+
+### Optional blocks: `list` without a block (`block_defined?`)
+
+`list`'s builder block is **optional**. `root.list(h)` with no block builds an
+empty scrollable region — a reserved fixed-height viewport whose rows arrive
+later — instead of erroring; `root.list(h) do |c: &var Col| … end` fills it. This
+is the one optional-block API in the DSL (it guards `yield` behind
+`block_defined?`). Pinned by `tests/list.rx`.
+
+### `alias` — Ruby synonyms, zero extra codegen
+
+`alias new old` binds a second NAME to the SAME method body (one symbol, no
+delegating thunk). quiver's genuine synonyms:
+
+| Type | Alias | Of |
+|---|---|---|
+| `Col` | `length` | `size` |
+| `ListModel` | `size`, `length` | `count` |
+| `App` | `type_char` | `text_input` |
+| `App` | `key` | `key_down` |
+
+`App.type_char` / `App.key` were hand-written delegating methods before — now
+true aliases. (Operator-spelled aliases like `alias << push` are staged in ruxen
+— E1123 — so quiver does not use them.)
+
+### String literals are `String` — never `String.from` on a literal
+
+A bare `"x"` (and interpolated `"x #{y}"`) IS a `String` in every position
+(method args, fields, `push`, `Err("…")`, `to_eq`). Write the literal directly.
+`String.from(...)` is kept ONLY to convert a `&str` **variable** to `String` (a
+real runtime operation, e.g. `String.from(label)` where `label: &str` is pushed
+into an `Array[String]`).
 
 ## Containers: `row` / `col` and arena nesting
 
@@ -71,14 +154,14 @@ root chain (`root_first`/`root_last`), and a build cursor `parent_cursor`.
 Node ids remain build-order indices — the "ids ARE node ids" invariant holds.
 
 ```ruxen
-root.text("title")        # node 0, a top-level (root) leaf
-root.row({ |c|            # node 1, a container; cursor moves onto it
-  c.text("left")          # node 2, child of the row
-  c.col({ |c2|            # node 3, a nested container
-    c.text("a")           # node 4, child of the col
-    c.text("b")           # node 5, child of the col
-  })
-})
+root.text("title")              # node 0, a top-level (root) leaf
+root.row do |c: &var Col|       # node 1, a container; cursor moves onto it
+  c.text("left")                # node 2, child of the row
+  c.col do |c2: &var Col|       # node 3, a nested container
+    c.text("a")                 # node 4, child of the col
+    c.text("b")                 # node 5, child of the col
+  end
+end
 ```
 
 `row` (X axis) and `col` (Y axis) push a container node, move the cursor onto
@@ -94,10 +177,10 @@ child re-renders on state change and a button child can mutate state, exactly
 like a top-level node.
 
 ```ruxen
-root.row({ |c|
+root.row do |c: &var Col|
   c.dyn_text({ |ui| "n: #{count.get(ui)}" })                 # re-renders on change
   c.button("tap", { |ui| count.update(ui, { |x| x + 1 }) })  # mutates state
-})
+end
 ```
 
 This depended on ruxen **Q26** — a capturing closure stored through a
@@ -114,9 +197,10 @@ A container can carry a `Style` — built with chainable setters and passed to
 `row_styled` / `col_styled` (plain `row`/`col` stay zero-style):
 
 ```ruxen
-root.row_styled(
-  Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4),
-  { |c| c.text("x") })
+let style = Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4)
+root.row_styled(style) do |c: &var Col|
+  c.text("x")
+end
 ```
 
 | Setter | Meaning |
@@ -149,12 +233,12 @@ A `list` is a `col`-like vertical container with a **fixed viewport height**: it
 clips its children and scrolls them when the content overflows.
 
 ```ruxen
-root.list(96, { |c|               # 96px viewport
+root.list(96) do |c: &var Col|    # 96px viewport
   c.text("row 1")
   c.text("row 2")
   c.text("row 3")
   c.text("row 4")                 # below the viewport — clipped until scrolled
-})
+end
 ```
 
 - **Layout.** The list's box is its viewport height (it does **not** grow to fit

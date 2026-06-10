@@ -126,14 +126,14 @@ Tester.describe("paint — multiple backends, one generic pass (ruxen Q17)") do 
       let on = ui.state_bool(true)
       root.text("Settings")
       let boxed = Style.new.background(230, 230, 230).border(2, 100, 100, 100).radius(4)
-      root.row_styled(boxed, { |c|
+      root.row_styled(boxed) do |c: &var Col|
         c.text("inside the box")
-      })
+      end
       root.checkbox(on, "enabled")
-      root.list(row_height() * 3, { |c|
+      root.list(row_height() * 3) do |c: &var Col|
         c.text("row a")
         c.text("row b")
-      })
+      end
     })
   }
 

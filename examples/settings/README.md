@@ -71,8 +71,12 @@ Every widget, composed idiomatically:
 
 6. **`let`-bind a function result before passing it to a method.** In this ruxen
    build, handing a function's class-value result *directly* to a method
-   argument segfaults — so `let style = card_style; root.row_styled(style, …)`,
-   not `root.row_styled(card_style, …)`. (See *Known gaps* below.)
+   argument segfaults — so `let style = card_style; root.row_styled(style) do |c:
+   &var Col| … end`, not `root.row_styled(card_style) do … end`. (See *Known
+   gaps* below.) Note the block form: container builders take an
+   immediately-invoked `do |c: &var Col| … end` block; stored callbacks
+   (`dyn_text`, button handlers) stay `{ |x| … }` braces (see quiver/docs/DSL.md
+   "Blocks & the do/brace idiom").
 
 ## Reactivity model: values, not structure
 

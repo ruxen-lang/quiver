@@ -64,14 +64,26 @@ event stream), `examples/counter` runs as a real windowed app:
 ## Later cycles
 
 - **DSL ergonomics** (audit 2026-06-09, `docs/decisions/dsl-ergonomics.md`) —
-  the builder stays Ruby-block-shaped; refinements live *within* that idiom. Win
-  shipped this cycle: inner stored-closure / container-block params drop their
-  type annotations (`{ |ui2| … }` / `{ |c| … }`), inferred from the builder
-  signature — applied across all three examples + the docs. Remaining ergonomic
-  wins are **language-gated** and filed as Q-candidates in that doc (top-level
-  `App.build` block param inference; non-Copy call-result as a method arg;
-  auto-reborrow of a `&var` used N>1 times) — to triage into the ruxen ledger,
-  not hacked around here.
+  the builder stays Ruby-block-shaped; refinements live *within* that idiom.
+  - 2026-06-09: inner STORED-closure params drop their type annotations
+    (`{ |ui2| … }` / `{ |c| … }`), inferred from the builder signature.
+  - 2026-06-10: **Ruby blocks + `alias`** adopted (CHANGELOG `[Unreleased]`,
+    docs/DSL.md). Container builders (`row`/`col`/`list`/styled) are now
+    `&block` + `yield`, called `root.row do |c: &var Col| … end`; `list`'s block
+    is optional via `block_defined?`. Stored callbacks stay `{ }` braces (the
+    do…end-vs-brace house rule). `String.from("literal")` swept to bare literals.
+    `alias` added for the genuine synonyms (`Col.length`, `ListModel.size/length`,
+    `App.type_char`/`key`).
+  - Remaining ergonomic wins are **language-gated** and filed as Q-candidates:
+    top-level `App.build` block param inference; the two-`&var`-arg `yield`
+    miscompile (Q36, why `App.build` stays a closure param); `&block` param-type
+    inference through the yield seam (why container block params must be typed);
+    non-Copy call-result as a method arg; auto-reborrow of a `&var` used N>1
+    times — to triage into the ruxen ledger, not hacked around here.
+  - **Pre-existing example-build regression** (toolchain): `examples/*` fail
+    `ruxen build` with `__block in function frame` on quiver's generic
+    `frame[S: PaintSurface]` consumed as a library; the lib + 157-test suite are
+    green. Filed in the ruxen ledger.
 - **Widget library** — rows/containers, lists, inputs, nesting (needs
   child-id arrays in the arena), styling.
 - **Text / i18n / accessibility** — via canvas's Skia paragraph /

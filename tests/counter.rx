@@ -28,9 +28,9 @@ Tester.describe("counter — the vertical slice, end to end") do |t: &var Tester
     let repainted = frame(&var app, &var surface)
 
     t.expect(repainted).to_eq(1)
-    t.expect(app.text_of(1)).to_eq(String.from("count: 1"))
+    t.expect(app.text_of(1)).to_eq("count: 1")
     # last command repainted the count node's new text
-    t.expect(surface.command_at(surface.size - 1)).to_eq(String.from("text('count: 1',4,40)"))
+    t.expect(surface.command_at(surface.size - 1)).to_eq("text('count: 1',4,40)")
   end
 
   t.it("idle frames repaint nothing") do
@@ -51,7 +51,7 @@ Tester.describe("counter — the vertical slice, end to end") do |t: &var Tester
       t.expect(frame(&var app, &var surface)).to_eq(1)
       taps = taps + 1
     end
-    t.expect(app.text_of(1)).to_eq(String.from("count: 10"))
+    t.expect(app.text_of(1)).to_eq("count: 10")
   end
 
   t.it("clicks on static text never dirty anything") do

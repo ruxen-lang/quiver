@@ -123,9 +123,18 @@ class App
   ##   var app = App.build({ |ui: &var Ui, root: &var Col|
   ##     let count = ui.state(0)
   ##     root.text("Counter")
-  ##     root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
-  ##     root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+  ##     root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })
+  ##     root.button("tap", { |ui2| count.update(ui2, { |c| c + 1 }) })
   ##   })
+  ##
+  ## This is the ONE builder that stays an explicit closure param rather than a
+  ## `&block` + `yield`: the block takes TWO `&var` references (`&var Ui`, `&var
+  ## Col`), and a `yield` with two `&var` reference arguments to fields of the
+  ## same object miscompiles on the v1 toolchain (the block builds into an empty
+  ## `Col`) — see the "two-&var-arg yield" landmine in CLAUDE.md / ruxen ledger
+  ## Q35. The closure-call form below (`f.(&var app.ui, &var app.root)`) is
+  ## sound. The OUTER block also keeps its `|ui: &var Ui, root: &var Col|` param
+  ## types — they are not inferred for this entry block (a ruxen inference gap).
   def self.build(f: any Fn[Fn(&var Ui, &var Col) -> nil]) -> App
     var app = App.new
     f.(&var app.ui, &var app.root)
@@ -744,16 +753,12 @@ class App
     self.insert_char(i, cp)
   end
 
-  ## Programmatic insert of one codepoint into the focused input (alias of
-  ## `text_input`) — the headless typing entry point.
-  def var type_char(cp: Int) -> nil
-    self.text_input(cp)
-  end
+  ## `type_char` is a true `alias` of `text_input` — the headless typing entry
+  ## point, one body, zero extra codegen (was a hand-written delegating method).
+  alias type_char text_input
 
-  ## Programmatic control key (alias of `key_down`) — the headless edit entry.
-  def var key(code: Int) -> nil
-    self.key_down(code)
-  end
+  ## `key` is a true `alias` of `key_down` — the headless control-key entry.
+  alias key key_down
 
   ## A mouse-wheel event: scroll the innermost scrollable `list` under the last
   ## hovered point by the wheel delta. `+dy` is wheel up/away → scroll content
@@ -978,11 +983,11 @@ class App
   def input_value(i: Int) -> String
     let idx = self.root.value_index_at(i)
     if idx < 0
-      return String.from("")
+      return ""
     end
     match self.root.values.get(idx)
       Some(s) -> s.peek
-      nil     -> String.from("")
+      nil     -> ""
     end
   end
 
@@ -1005,7 +1010,7 @@ class App
   def var insert_char(i: Int, code: Int) -> nil
     let caret = self.caret_of(i)
     self.edit_value(i, { |cur: String|
-      var out = String.from("")
+      var out = ""
       var n = 0
       for c in cur.chars
         if n == caret
@@ -1031,7 +1036,7 @@ class App
       return
     end
     self.edit_value(i, { |cur: String|
-      var out = String.from("")
+      var out = ""
       var n = 0
       for c in cur.chars
         if n != caret - 1
@@ -1067,7 +1072,7 @@ class App
       return
     end
     self.edit_value(i, { |cur: String|
-      var out = String.from("")
+      var out = ""
       var n = 0
       for c in cur.chars
         if n != caret

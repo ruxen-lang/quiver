@@ -45,11 +45,11 @@ Tester.describe("checkbox — toggle, reactive paint, label") do |t: &var Tester
     paint_all(&app, &var surface)
     # clear + border box + label  (no inner mark when unchecked)
     t.expect(surface.size).to_eq(3)
-    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
     # border box: stroke at (pad_x, 4), box size, 0 radius, 1px, grey
-    t.expect(surface.command_at(1)).to_eq(String.from("stroke_rect(#{pad_x()},4,#{check_box_size()},#{check_box_size()},0,1,80,80,80)"))
+    t.expect(surface.command_at(1)).to_eq("stroke_rect(#{pad_x()},4,#{check_box_size()},#{check_box_size()},0,1,80,80,80)")
     # label sits after the box + gap
-    t.expect(surface.command_at(2)).to_eq(String.from("text('agree',#{pad_x() + check_box_size() + pad_x()},#{baseline_drop()})"))
+    t.expect(surface.command_at(2)).to_eq("text('agree',#{pad_x() + check_box_size() + pad_x()},#{baseline_drop()})")
   end
 
   t.it("checked paints the border box AND a filled inner mark, then the label") do
@@ -60,10 +60,10 @@ Tester.describe("checkbox — toggle, reactive paint, label") do |t: &var Tester
     paint_all(&app, &var surface)
     # clear + border box + inner mark + label  (4 commands)
     t.expect(surface.size).to_eq(4)
-    t.expect(surface.command_at(1)).to_eq(String.from("stroke_rect(#{pad_x()},4,#{check_box_size()},#{check_box_size()},0,1,80,80,80)"))
+    t.expect(surface.command_at(1)).to_eq("stroke_rect(#{pad_x()},4,#{check_box_size()},#{check_box_size()},0,1,80,80,80)")
     # inner mark: filled square inset 3px inside the box
-    t.expect(surface.command_at(2)).to_eq(String.from("rect(#{pad_x() + 3},7,#{check_box_size() - 6},#{check_box_size() - 6},40,40,40)"))
-    t.expect(surface.command_at(3)).to_eq(String.from("text('agree',#{pad_x() + check_box_size() + pad_x()},#{baseline_drop()})"))
+    t.expect(surface.command_at(2)).to_eq("rect(#{pad_x() + 3},7,#{check_box_size() - 6},#{check_box_size() - 6},40,40,40)")
+    t.expect(surface.command_at(3)).to_eq("text('agree',#{pad_x() + check_box_size() + pad_x()},#{baseline_drop()})")
   end
 
   t.it("an initially-true checkbox paints checked from the first frame") do

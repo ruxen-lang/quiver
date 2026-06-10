@@ -5,9 +5,9 @@
 Tester.describe("select — trigger, overlay popup, dismiss") do |t: &var Tester|
   let opts = { ||
     var o: Array[String] = Array.new
-    o.push(String.from("red"))
-    o.push(String.from("green"))
-    o.push(String.from("blue"))
+    o.push("red")
+    o.push("green")
+    o.push("blue")
     o
   }
 
@@ -21,7 +21,7 @@ Tester.describe("select — trigger, overlay popup, dismiss") do |t: &var Tester
   t.it("the trigger shows the initial option; no overlay open at first") do
     var app = form.()
     t.expect(app.overlay_open?).to_eq(false)
-    t.expect(app.select_text(0)).to_eq(String.from("red"))
+    t.expect(app.select_text(0)).to_eq("red")
     t.expect(app.w_of(0)).to_eq(100)
     t.expect(app.h_of(0)).to_eq(row_height())
   end
@@ -41,7 +41,7 @@ Tester.describe("select — trigger, overlay popup, dismiss") do |t: &var Tester
     app.flush
     t.expect(app.overlay_open?).to_eq(false)
     t.expect(app.select_value(0)).to_eq(1)
-    t.expect(app.select_text(0)).to_eq(String.from("green"))
+    t.expect(app.select_text(0)).to_eq("green")
   end
 
   t.it("clicking the first option selects index 0") do
@@ -97,10 +97,10 @@ Tester.describe("select — trigger, overlay popup, dismiss") do |t: &var Tester
     var k = 0
     while k < n
       let cmd = surface.command_at(k)
-      if cmd == String.from("round_rect(0,0,100,#{row_height()},0,235,235,235)")
+      if cmd == "round_rect(0,0,100,#{row_height()},0,235,235,235)"
         trigger_box_at = k
       end
-      if cmd == String.from("round_rect(0,#{row_height()},100,#{row_height() * 3},0,250,250,250)")
+      if cmd == "round_rect(0,#{row_height()},100,#{row_height() * 3},0,250,250,250)"
         panel_at = k
       end
       k = k + 1

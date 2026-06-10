@@ -52,7 +52,7 @@ Tester.describe("overlay primitive — open / close / owner / anchor") do |t: &v
     app.flush
     # the click was consumed by the overlay (it dismisses), the button did NOT
     # fire — hits stays 0.
-    t.expect(app.text_of(2)).to_eq(String.from("hits=0"))
+    t.expect(app.text_of(2)).to_eq("hits=0")
     # and the overlay closed as a result of the outside click.
     t.expect(app.overlay_open?).to_eq(false)
   end
@@ -61,6 +61,6 @@ Tester.describe("overlay primitive — open / close / owner / anchor") do |t: &v
     var app = app_with.()
     app.pointer_down(2, row_height() + 2)   # button hit, fires
     app.flush
-    t.expect(app.text_of(2)).to_eq(String.from("hits=1"))
+    t.expect(app.text_of(2)).to_eq("hits=1")
   end
 end

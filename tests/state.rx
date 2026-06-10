@@ -22,9 +22,9 @@ Tester.describe("State + Ui reactive core") do |t: &var Tester|
 
   t.it("string state holds owned strings") do
     var ui = Ui.new
-    let name = ui.state_str(String.from("ada"))
-    name.set(&var ui, String.from("lovelace"))
-    t.expect(name.peek).to_eq(String.from("lovelace"))
+    let name = ui.state_str("ada")
+    name.set(&var ui, "lovelace")
+    t.expect(name.peek).to_eq("lovelace")
   end
 
   t.it("get inside a tracking scope subscribes that scope") do

@@ -22,14 +22,18 @@ def build_app -> App
     root.text("Todo")                                              # 0 static
 
     # Two action buttons. Their handlers capture `todos` (non-consuming) and
-    # mutate it; the row text reflects done state via the model.
-    root.row({ |c|
+    # mutate it; the row text reflects done state via the model. `row` is an
+    # immediately-invoked container builder → `do…end` (structure). The button
+    # HANDLERS stay `{ |u| … }` braces (stored behaviour).
+    root.row do |c: &var Col|
       c.button("Add", { |u| todos.add(u, "new task") })   # append a row
       c.button("Toggle 0", { |u| todos.toggle(u, 0) })    # flip first
       c.button("Del 0", { |u| todos.remove(u, 0) })       # drop first
-    })
+    end
 
     # The reactive list: one row per item, scrolling within a fixed viewport.
+    # `list_of`'s item builder is STORED (re-run on every rebuild), so it stays a
+    # `{ |c, m, i| … }` brace closure — not a `do…end` block. See docs/DSL.md.
     root.list_of(todos, row_height() * 6, { |c, m, i|
       c.text("#{m.row_text(i)}")
     })
@@ -40,7 +44,7 @@ def main
   puts "quiver todo — dynamic list (structural reactivity)"
   let w = 280
   let h = 240
-  match Window.open(String.from("Todo"), w, h)
+  match Window.open("Todo", w, h)
     Ok(win) -> drive(win)
     Err(e)  -> puts "cannot create canvas: #{e}"
   end

@@ -28,7 +28,7 @@ Tester.describe("text input — focus, type, caret, backspace") do |t: &var Test
     app.type_char(104)                # 'h'
     app.type_char(105)                # 'i'
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from("hi"))
+    t.expect(app.text_of(1)).to_eq("hi")
     t.expect(app.caret_of(1)).to_eq(2)
   end
 
@@ -36,7 +36,7 @@ Tester.describe("text input — focus, type, caret, backspace") do |t: &var Test
     var app = form.()
     app.type_char(120)                # 'x' with nothing focused
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from(""))
+    t.expect(app.text_of(1)).to_eq("")
     t.expect(app.caret_of(1)).to_eq(0)
   end
 
@@ -49,7 +49,7 @@ Tester.describe("text input — focus, type, caret, backspace") do |t: &var Test
     app.flush
     app.key(key_backspace())
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from("ab"))
+    t.expect(app.text_of(1)).to_eq("ab")
     t.expect(app.caret_of(1)).to_eq(2)
   end
 
@@ -61,11 +61,11 @@ Tester.describe("text input — focus, type, caret, backspace") do |t: &var Test
     app.flush
     app.key(key_left())               # caret -> 1, value unchanged
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from("ac"))
+    t.expect(app.text_of(1)).to_eq("ac")
     t.expect(app.caret_of(1)).to_eq(1)
     app.type_char(98)                 # insert 'b' at caret 1 -> "abc"
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from("abc"))
+    t.expect(app.text_of(1)).to_eq("abc")
     t.expect(app.caret_of(1)).to_eq(2)
   end
 
@@ -97,13 +97,13 @@ Tester.describe("text input — focus, type, caret, backspace") do |t: &var Test
     paint_all(&app, &var surface)
     # clear + label text + input box + input text + caret  (5)
     t.expect(surface.size).to_eq(5)
-    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
-    t.expect(surface.command_at(1)).to_eq(String.from("text('name:',4,16)"))
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    t.expect(surface.command_at(1)).to_eq("text('name:',4,16)")
     # input box at (0, row_height), 100 wide, one row tall
-    t.expect(surface.command_at(2)).to_eq(String.from("round_rect(0,#{row_height()},100,#{row_height()},0,245,245,245)"))
-    t.expect(surface.command_at(3)).to_eq(String.from("text('hi',4,#{row_height() + baseline_drop()})"))
+    t.expect(surface.command_at(2)).to_eq("round_rect(0,#{row_height()},100,#{row_height()},0,245,245,245)")
+    t.expect(surface.command_at(3)).to_eq("text('hi',4,#{row_height() + baseline_drop()})")
     # caret: a 1px-wide rect after "hi" (2 chars), inset by pad_x
-    t.expect(surface.command_at(4)).to_eq(String.from("rect(#{pad_x() + 2 * char_width()},#{row_height() + 4},1,#{row_height() - 8},20,20,20)"))
+    t.expect(surface.command_at(4)).to_eq("rect(#{pad_x() + 2 * char_width()},#{row_height() + 4},1,#{row_height() - 8},20,20,20)")
   end
 
   t.it("an unfocused input paints no caret") do
@@ -114,6 +114,6 @@ Tester.describe("text input — focus, type, caret, backspace") do |t: &var Test
     paint_all(&app, &var surface)
     # clear + label + box + (empty) text, NO caret
     t.expect(surface.size).to_eq(4)
-    t.expect(surface.command_at(3)).to_eq(String.from("text('',4,#{row_height() + baseline_drop()})"))
+    t.expect(surface.command_at(3)).to_eq("text('',4,#{row_height() + baseline_drop()})")
   end
 end

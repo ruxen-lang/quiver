@@ -100,11 +100,11 @@ Tester.describe("slider — value mapping, drag capture, paint") do |t: &var Tes
     var surface = RecordingSurface.new
     paint_all(&app, &var surface)
     # clear + track + filled-portion + thumb
-    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
     # thumb for value 5: center x = 6 + 5*88/10 = 50; thumb box at cx-6 = 44,
     # y = (row_height - slider_thumb)/2 = 6
     let thumb_cmd = surface.command_at(surface.size - 1)
-    t.expect(thumb_cmd).to_eq(String.from("round_rect(44,6,#{slider_thumb()},#{slider_thumb()},6,60,60,160)"))
+    t.expect(thumb_cmd).to_eq("round_rect(44,6,#{slider_thumb()},#{slider_thumb()},6,60,60,160)")
   end
 
   t.it("the thumb sits at track_left for the min value") do
@@ -112,7 +112,7 @@ Tester.describe("slider — value mapping, drag capture, paint") do |t: &var Tes
     # value 0 -> center x = track_left = 6 -> thumb box at 0
     var surface = RecordingSurface.new
     paint_all(&app, &var surface)
-    t.expect(surface.command_at(surface.size - 1)).to_eq(String.from("round_rect(0,6,#{slider_thumb()},#{slider_thumb()},6,60,60,160)"))
+    t.expect(surface.command_at(surface.size - 1)).to_eq("round_rect(0,6,#{slider_thumb()},#{slider_thumb()},6,60,60,160)")
   end
 
   t.it("a slider inside a scrolled list still hit-tests / captures correctly") do

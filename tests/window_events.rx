@@ -19,7 +19,7 @@ Tester.describe("window events — text_input / key_down / scroll / resize") do 
     app.text_input(104)               # 'h'
     app.text_input(105)               # 'i'
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from("hi"))
+    t.expect(app.text_of(1)).to_eq("hi")
     t.expect(app.caret_of(1)).to_eq(2)
   end
 
@@ -28,7 +28,7 @@ Tester.describe("window events — text_input / key_down / scroll / resize") do 
     app.pointer_down(4, input_y.())
     app.key_down(120)                 # 'x' as a KEY — must be ignored now
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from(""))
+    t.expect(app.text_of(1)).to_eq("")
     t.expect(app.caret_of(1)).to_eq(0)
   end
 
@@ -37,7 +37,7 @@ Tester.describe("window events — text_input / key_down / scroll / resize") do 
     app.pointer_down(4, input_y.())
     app.text_input(233)               # 'é'
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from("é"))
+    t.expect(app.text_of(1)).to_eq("é")
   end
 
   t.it("key_down backspace deletes; left/right move the caret") do
@@ -49,7 +49,7 @@ Tester.describe("window events — text_input / key_down / scroll / resize") do 
     app.flush
     app.key_down(key_backspace())     # delete 'c'
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from("ab"))
+    t.expect(app.text_of(1)).to_eq("ab")
     t.expect(app.caret_of(1)).to_eq(2)
     app.key_down(key_left())          # caret 2 -> 1
     t.expect(app.caret_of(1)).to_eq(1)
@@ -61,7 +61,7 @@ Tester.describe("window events — text_input / key_down / scroll / resize") do 
     var app = form.()
     app.text_input(120)               # nobody focused
     app.flush
-    t.expect(app.text_of(1)).to_eq(String.from(""))
+    t.expect(app.text_of(1)).to_eq("")
   end
 
   # --- scroll routing ---

@@ -41,7 +41,7 @@ Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do
     t.expect(app.list_model_of(1).count).to_eq(1)
     let row = app.root.first_child_of(1)
     t.expect(row >= 0).to_eq(true)
-    t.expect(app.text_of(row)).to_eq(String.from("[ ] alpha"))
+    t.expect(app.text_of(row)).to_eq("[ ] alpha")
   end
 
   t.it("add grows the list by a row; flush rebuilds the subtree in order") do
@@ -56,7 +56,7 @@ Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do
       c = app.root.next_sibling_of(c)
     end
     t.expect(rows.size as Int).to_eq(2)
-    t.expect(app.text_of(app.root.first_child_of(1))).to_eq(String.from("[ ] alpha"))
+    t.expect(app.text_of(app.root.first_child_of(1))).to_eq("[ ] alpha")
   end
 
   t.it("the rest of the tree is untouched by a list rebuild") do
@@ -65,7 +65,7 @@ Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do
     app.list_model_of(1).add(&var app.ui, "beta")
     app.flush
     t.expect(app.text_of(0)).to_eq(header_before)
-    t.expect(app.text_of(0)).to_eq(String.from("Todos"))
+    t.expect(app.text_of(0)).to_eq("Todos")
   end
 
   t.it("toggle flips an item's done marker; the row text reflects it") do
@@ -75,7 +75,7 @@ Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do
     app.list_model_of(1).toggle(&var app.ui, 0)   # mark "alpha" done
     app.flush
     let row0 = app.root.first_child_of(1)
-    t.expect(app.text_of(row0)).to_eq(String.from("[x] alpha"))
+    t.expect(app.text_of(row0)).to_eq("[x] alpha")
     t.expect(app.list_model_of(1).done_at(0)).to_eq(true)
   end
 
@@ -96,7 +96,7 @@ Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do
       c = app.root.next_sibling_of(c)
     end
     t.expect(rows.size as Int).to_eq(2)
-    t.expect(app.text_of(app.root.first_child_of(1))).to_eq(String.from("[ ] alpha"))
+    t.expect(app.text_of(app.root.first_child_of(1))).to_eq("[ ] alpha")
   end
 
   t.it("paint records the current rows; a rebuilt list paints its new children") do
@@ -114,10 +114,10 @@ Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do
       # the list is node 1 (below the header), so its rows paint in the list's
       # content space starting at y = row_height: alpha at baseline 24+16=40,
       # beta at 48+16=64 — inside the list's save/clip/translate.
-      if cmd == String.from("text('[ ] alpha',4,40)")
+      if cmd == "text('[ ] alpha',4,40)"
         saw_alpha = true
       end
-      if cmd == String.from("text('[ ] beta',4,64)")
+      if cmd == "text('[ ] beta',4,64)"
         saw_beta = true
       end
       k = k + 1
@@ -132,5 +132,17 @@ Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do
     app.flush
     t.expect(app.list_model_of(1).count).to_eq(0)
     t.expect(app.root.first_child_of(1)).to_eq(-1)
+  end
+
+  # `alias size count` / `alias length count` on ListModel — Ruby synonyms, one
+  # body each, so `model.size` / `model.length` read the same item count.
+  t.it("ListModel.size and ListModel.length alias count") do
+    var app = todo_app.()
+    app.list_model_of(1).add(&var app.ui, "alpha")
+    app.list_model_of(1).add(&var app.ui, "beta")
+    app.flush
+    t.expect(app.list_model_of(1).size).to_eq(2)
+    t.expect(app.list_model_of(1).length).to_eq(2)
+    t.expect(app.list_model_of(1).size).to_eq(app.list_model_of(1).count)
   end
 end

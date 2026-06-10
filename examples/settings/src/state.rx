@@ -20,10 +20,10 @@
 ## the `select` widget renders it, and `theme` is an index into it.
 def theme_options -> Array[String]
   var o: Array[String] = Array.new
-  o.push(String.from("System"))
-  o.push(String.from("Light"))
-  o.push(String.from("Dark"))
-  o.push(String.from("High contrast"))
+  o.push("System")
+  o.push("Light")
+  o.push("Dark")
+  o.push("High contrast")
   o
 end
 
@@ -33,12 +33,12 @@ end
 ## app reacts on VALUES, not structure.)
 def device_rows -> Array[String]
   var o: Array[String] = Array.new
-  o.push(String.from("Keyboard"))
-  o.push(String.from("Trackpad"))
-  o.push(String.from("Display"))
-  o.push(String.from("Speakers"))
-  o.push(String.from("Microphone"))
-  o.push(String.from("Camera"))
+  o.push("Keyboard")
+  o.push("Trackpad")
+  o.push("Display")
+  o.push("Speakers")
+  o.push("Microphone")
+  o.push("Camera")
   o
 end
 
@@ -51,8 +51,8 @@ end
 ## Turn a Bool into an on/off word for display.
 def on_off(b: Bool) -> String
   if b
-    String.from("on")
+    "on"
   else
-    String.from("off")
+    "off"
   end
 end

@@ -56,8 +56,6 @@ ruxen fmt <file>                  # canonical formatting
   → flat parallel arrays + `-1` sentinels.
 - No `Option[any Fn]` fields (garbage values) → index arrays into closure pools.
 - No overloading one method name on `&str` vs closure (heap corruption).
-- `do…end` blocks segfault when passed to *free functions* with explicit
-  closure params; methods are fine. Stored callbacks use `{ |x| … }` braces.
 - `move` closures can't capture non-Copy class values; plain capture works
   (pointer-copy) — sound today because drops don't run yet.
 - `arr[i]` with a non-literal index parses as generics → use `.get(i)`;
@@ -104,6 +102,45 @@ ruxen fmt <file>                  # canonical formatting
   top-level reactive nodes (pinned by `tests/nesting.rx`: "a dyn_text child
   re-renders when a button child mutates its state"). Repro (now passing) in
   `tmp/test-cache/ruxen-closure-capture-reborrow.md`.
+- **`yield` with TWO `&var` reference args miscompiles (ruxen ledger Q36).** A
+  `yield(&var app.ui, &var app.root)` — two `&var` references to fields of the
+  same object in one `yield` — builds into an EMPTY/wrong target (the block runs
+  but its `&var` params don't bind). A single-`&var`-arg `yield(&var *self)` is
+  fine, and the ordinary closure-call form `f.(&var app.ui, &var app.root)` is
+  fine. **This is why `App.build` stays an explicit closure param** (`f: any
+  Fn[Fn(&var Ui, &var Col) -> nil]`), not a `&block` + `yield`. The single-`&var`
+  container builders (`row`/`col`/`list`/`row_styled`/`col_styled`) DID convert
+  to `&block` + `yield`. Repro: `tmp/test-cache/ruxen-two-var-yield.md`.
+- **Block params don't infer through the `&block`/`yield` seam.** A container
+  builder block must TYPE its param: `root.row do |c: &var Col| … end`, never
+  `do |c| … end` (the latter leaves `c` as `?T` → `no runtime symbol for ?T::text`
+  at codegen). Typed works in both `do…end` and `{ }` forms.
+
+## Blocks, alias & string literals (the current idiom)
+
+- **`&block` + `yield` for immediately-invoked builders.** The container builders
+  (`row`/`col`/`list`/`row_styled`/`col_styled`) declare a `&block: Fn[(&var Col)
+  -> nil]` and `yield(&var *self)`; call sites read `root.row do |c: &var Col| …
+  end`. `list`'s block is OPTIONAL via `block_defined?` (`root.list(h)` with no
+  block builds an empty viewport). See the ruxen tutorial
+  `../ruxen/docs/tutorial/09-closures-and-blocks.md` and the two ADRs
+  `../ruxen/docs/decisions/{ruby-block-semantics,alias-keyword}.md`.
+- **STORED callbacks stay `{ |x| … }` brace closures, not blocks** — a `&block`
+  slot is for yield-time use; storing it is a different lifetime story.
+  `dyn_text`, `button` handlers, `set_measure`, and `list_of`'s item builder
+  (re-invoked on every rebuild) are stored ⇒ explicit closure params / brace
+  literals. House rule: **do…end = immediately-invoked structure; { } = stored
+  behaviour.** Documented in docs/DSL.md.
+- **`alias new old`** is a pure synonym (one body, zero extra codegen): `Col`
+  has `alias length size`; `ListModel` has `alias size count` / `alias length
+  count`; `App` has `alias type_char text_input` / `alias key key_down` (these
+  replaced hand-written delegating methods). Operator-spelled aliases are staged
+  (E1123) — don't use them.
+- **String literals ARE `String` — never write `String.from` on a literal.** A
+  bare `"x"` (interpolated literals too: `"x #{y}"`) coerces to `String` in every
+  position (args, fields, `push`, `Err("…")`, `to_eq`). `String.from(...)` is
+  kept ONLY for a `&str` VARIABLE → `String` conversion (a real runtime op, e.g.
+  `String.from(label)` where `label: &str`).
 
 ### Q18 — RESOLVED 2026-06-08: stale divergent install (NOT a master bug)
 

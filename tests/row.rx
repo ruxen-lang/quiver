@@ -6,10 +6,10 @@ Tester.describe("Row + own-flex layout pass") do |t: &var Tester|
   let titled_row = { ||
     App.build({ |ui: &var Ui, root: &var Col|
       root.text("hi")                      # node 0 (root leaf)
-      root.row({ |c: &var Col|             # node 1 (root container)
+      root.row do |c: &var Col|            # node 1 (root container)
         c.text("ab")                       # node 2
         c.text("cde")                      # node 3
-      })
+      end
     })
   }
 
@@ -46,13 +46,13 @@ Tester.describe("Row + own-flex layout pass") do |t: &var Tester|
 
   t.it("a nested col inside a row stacks vertically within its column") do
     var app = App.build({ |ui: &var Ui, root: &var Col|
-      root.row({ |c: &var Col|             # 0 row
+      root.row do |c: &var Col|            # 0 row
         c.text("L")                        # 1 leaf, left column
-        c.col({ |c2: &var Col|             # 2 col, right
+        c.col do |c2: &var Col|            # 2 col, right
           c.text("hello")                  # 3
           c.text("x")                      # 4
-        })
-      })
+        end
+      end
     })
     # left leaf at origin
     t.expect(app.x_of(1)).to_eq(0)
@@ -75,11 +75,11 @@ Tester.describe("Row + own-flex layout pass") do |t: &var Tester|
     paint_all(&app, &var surface)
     # clear + text(hi) + [row draws nothing] + text(ab) + text(cde)
     t.expect(surface.size).to_eq(4)
-    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
-    t.expect(surface.command_at(1)).to_eq(String.from("text('hi',4,16)"))
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    t.expect(surface.command_at(1)).to_eq("text('hi',4,16)")
     # "ab" at x=0 of the row band (y = row_height) -> baseline (4, 24+16)
-    t.expect(surface.command_at(2)).to_eq(String.from("text('ab',4,40)"))
+    t.expect(surface.command_at(2)).to_eq("text('ab',4,40)")
     # "cde" offset right by ab's width (w_for(2)=24) -> x = 24+pad_x(4) = 28
-    t.expect(surface.command_at(3)).to_eq(String.from("text('cde',28,40)"))
+    t.expect(surface.command_at(3)).to_eq("text('cde',28,40)")
   end
 end

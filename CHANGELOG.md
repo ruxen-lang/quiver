@@ -7,6 +7,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **DSL adopts Ruby blocks + `alias`; bare string literals replace
+  `String.from("…")`.** An idiom migration (no runtime-behaviour change — the
+  build-once invariant holds):
+  - **Container builders are `&block` + `yield`.** `row` / `col` / `list` /
+    `row_styled` / `col_styled` now declare `&block: Fn[(&var Col) -> nil]` and
+    `yield(&var *self)` (private `container` → `open_container`/`close_container`
+    primitives, since block-forwarding is staged in ruxen). Call sites read
+    `root.row do |c: &var Col| … end`. The param MUST be typed (`&block` type
+    does not infer through the yield seam). `list`'s block is **optional**
+    (`block_defined?`): `root.list(h)` with no block builds an empty viewport.
+  - **Stored callbacks stay `{ … }` brace closures**, NOT blocks — `dyn_text`,
+    `button` handlers, `set_measure`, and `list_of`'s item builder (re-invoked on
+    every rebuild). House rule: **do…end = immediately-invoked structure; { } =
+    stored behaviour** (docs/DSL.md "Blocks & the do/brace idiom").
+  - **`App.build` stays an explicit closure param** — its two-`&var`-arg block
+    miscompiles under `yield` (filed ruxen Q36; repro
+    `tmp/test-cache/ruxen-two-var-yield.md`).
+  - **`alias` synonyms** (one body, zero extra codegen): `Col.length`→`size`;
+    `ListModel.size`/`length`→`count`; `App.type_char`→`text_input`,
+    `App.key`→`key_down` (the last two replaced hand-written delegating methods).
+  - **`String.from("literal")` → bare `"literal"`** across `src/` / `tests/` /
+    `examples/` (154 call sites; interpolated literals too). Bare literals coerce
+    to `String` everywhere; `String.from(...)` kept ONLY for `&str`-variable →
+    `String` conversions (5 sites: `String.from(label)`).
+  - New pins: optional-block `list` (`tests/list.rx`), `Col.length` alias
+    (`tests/dsl.rx`), `ListModel.size`/`length` aliases (`tests/dynamic_list.rx`).
+    Suite **153 → 157** (additive). Stale "do…end → free-fn segfault" landmine
+    deleted from CLAUDE.md (ruxen Q3 fixed upstream).
+  - **Known issue (pre-existing, NOT from this change):** `examples/{counter,
+    settings,todo}` do not currently `ruxen build` on the installed toolchain —
+    a `could not infer type for parameter __block in function frame` error on
+    quiver's generic `frame[S: PaintSurface]` (`src/run.rx`) when quiver is
+    consumed as a library by a binary. Reproduces at pristine HEAD (clean
+    rebuild), independent of this migration; the quiver **library** builds and
+    the 157-test headless suite is green. Filed for the toolchain.
 - **Direct-paint backend: dropped the single-`PaintSurface` workaround (ruxen
   Q17).** quiver's generic paint pass (`paint_all`/`paint_dirty`,
   `def …[S: PaintSurface]`) now monomorphizes against a `PaintSurface`

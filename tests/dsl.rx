@@ -4,14 +4,14 @@ Tester.describe("Col builder DSL") do |t: &var Tester|
     col.text("Counter")
     t.expect(col.size).to_eq(1)
     t.expect(col.kind_at(0)).to_eq(kind_text())
-    t.expect(col.label_at(0)).to_eq(String.from("Counter"))
+    t.expect(col.label_at(0)).to_eq("Counter")
     t.expect(col.compute_at(0)).to_eq(-1)
     t.expect(col.handler_at(0)).to_eq(-1)
   end
 
   t.it("dyn_text appends a reactive node holding its closure") do
     var col = Col.new
-    col.dyn_text({ |ui: &var Ui| String.from("computed") })
+    col.dyn_text({ |ui: &var Ui| "computed" })
     t.expect(col.kind_at(0)).to_eq(kind_dyn_text())
     t.expect(col.compute_at(0)).to_eq(0)
     t.expect(col.handler_at(0)).to_eq(-1)
@@ -21,7 +21,7 @@ Tester.describe("Col builder DSL") do |t: &var Tester|
     var col = Col.new
     col.button("tap", { |ui: &var Ui| nil })
     t.expect(col.kind_at(0)).to_eq(kind_button())
-    t.expect(col.label_at(0)).to_eq(String.from("tap"))
+    t.expect(col.label_at(0)).to_eq("tap")
     t.expect(col.handler_at(0)).to_eq(0)
     t.expect(col.compute_at(0)).to_eq(-1)
   end
@@ -29,7 +29,7 @@ Tester.describe("Col builder DSL") do |t: &var Tester|
   t.it("nodes keep declaration order and ids") do
     var col = Col.new
     col.text("a")
-    col.dyn_text({ |ui: &var Ui| String.from("b") })
+    col.dyn_text({ |ui: &var Ui| "b" })
     col.button("c", { |ui: &var Ui| nil })
     t.expect(col.size).to_eq(3)
     t.expect(col.kind_at(0)).to_eq(kind_text())
@@ -46,11 +46,11 @@ Tester.describe("Col builder DSL") do |t: &var Tester|
     ui.current_scope = 0
     let out = match col.computes.get(0)
       Some(f) -> f.(&var ui)
-      nil     -> String.from("missing")
+      nil     -> "missing"
     end
     ui.current_scope = -1
 
-    t.expect(out).to_eq(String.from("count: 5"))
+    t.expect(out).to_eq("count: 5")
     t.expect(ui.subs.size as Int).to_eq(1)
   end
 
@@ -71,8 +71,19 @@ Tester.describe("Col builder DSL") do |t: &var Tester|
   t.it("out-of-range accessors return sentinels, not panics") do
     var col = Col.new
     t.expect(col.kind_at(9)).to_eq(0)
-    t.expect(col.label_at(9)).to_eq(String.from(""))
+    t.expect(col.label_at(9)).to_eq("")
     t.expect(col.compute_at(9)).to_eq(-1)
     t.expect(col.handler_at(9)).to_eq(-1)
+  end
+
+  # `alias length size` on Col — a pure Ruby synonym (one body), not a second
+  # method. Pins that both names resolve to the same count.
+  t.it("Col.length is an alias of Col.size") do
+    var col = Col.new
+    col.text("a")
+    col.text("b")
+    col.text("c")
+    t.expect(col.length).to_eq(3)
+    t.expect(col.length).to_eq(col.size)
   end
 end

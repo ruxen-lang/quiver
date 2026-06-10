@@ -63,15 +63,15 @@ Tester.describe("List — fixed viewport, clip + scroll") do |t: &var Tester|
     var surface = RecordingSurface.new
     paint_all(&app, &var surface)
     # clear, save, clip(viewport), translate(0,-24), 4 child texts, restore
-    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
-    t.expect(surface.command_at(1)).to_eq(String.from("save"))
-    t.expect(surface.command_at(2)).to_eq(String.from("clip(0,0,#{app.w_of(0)},#{row_height() * 2})"))
-    t.expect(surface.command_at(3)).to_eq(String.from("translate(0,#{0 - row_height()})"))
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    t.expect(surface.command_at(1)).to_eq("save")
+    t.expect(surface.command_at(2)).to_eq("clip(0,0,#{app.w_of(0)},#{row_height() * 2})")
+    t.expect(surface.command_at(3)).to_eq("translate(0,#{0 - row_height()})")
     # children paint at their CONTENT-space positions (the translate scrolls
     # them); 'a' is the first child, baseline at content y=0 + baseline_drop
-    t.expect(surface.command_at(4)).to_eq(String.from("text('a',4,#{baseline_drop()})"))
+    t.expect(surface.command_at(4)).to_eq("text('a',4,#{baseline_drop()})")
     # the last command restores the clip/translate
-    t.expect(surface.command_at(surface.size - 1)).to_eq(String.from("restore"))
+    t.expect(surface.command_at(surface.size - 1)).to_eq("restore")
   end
 
   t.it("structured clip/translate/restore ops are recorded for replay") do
@@ -85,5 +85,36 @@ Tester.describe("List — fixed viewport, clip + scroll") do |t: &var Tester|
     t.expect(surface.op_at(3)).to_eq(op_translate())
     t.expect(surface.y_at(3)).to_eq(0)              # offset 0 at rest
     t.expect(surface.op_at(surface.size - 1)).to_eq(op_restore())
+  end
+
+  # `list`'s builder block is OPTIONAL (ruxen `block_defined?`): a `list(h)` call
+  # with NO block builds an empty scrollable region — a reserved fixed-height
+  # viewport whose rows arrive later — instead of erroring. This pins the one
+  # optional-block API in the DSL (docs/DSL.md "Blocks & the do/brace idiom").
+  t.it("list with NO block builds an empty viewport (block_defined? false path)") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      root.text("header")            # node 0
+      root.list(row_height() * 2)    # node 1 — blockless: an empty list
+    })
+    # the list node exists, is a list, and is childless
+    t.expect(app.root.kind_at(1)).to_eq(kind_list())
+    t.expect(app.root.list_at(1)).to_eq(true)
+    t.expect(app.root.first_child_of(1)).to_eq(-1)
+    # its box is the fixed viewport height (a list does not grow to content)
+    t.expect(app.h_of(1)).to_eq(row_height() * 2)
+    # content height is 0 (no rows), so it cannot scroll
+    t.expect(app.content_height_of(1)).to_eq(0)
+  end
+
+  t.it("list WITH a block still builds its rows (block_defined? true path)") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      root.list(row_height() * 4) do |c: &var Col|
+        c.text("r1")
+        c.text("r2")
+      end
+    })
+    t.expect(app.root.first_child_of(0) >= 0).to_eq(true)
+    # two rows of content
+    t.expect(app.content_height_of(0)).to_eq(row_height() * 2)
   end
 end

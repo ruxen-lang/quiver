@@ -97,7 +97,7 @@ def main
   puts "quiver counter — live window demo"
   let w = 200
   let h = 96
-  match Window.open(String.from("Counter"), w, h)
+  match Window.open("Counter", w, h)
     Ok(win) -> drive(win)
     Err(e)  -> puts "cannot create canvas: #{e}"
   end

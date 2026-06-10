@@ -57,7 +57,7 @@ Tester.describe("Real text metrics — the injected measure seam") do |t: &var T
     t.expect(app.w_of(0)).to_eq(3 * 7 + pad_x() * 2)
     app.click(1)
     app.flush
-    t.expect(app.text_of(0)).to_eq(String.from("n=108"))
+    t.expect(app.text_of(0)).to_eq("n=108")
     t.expect(app.w_of(0)).to_eq(5 * 7 + pad_x() * 2)
   end
   let mixed_row = { || App.build({ |ui: &var Ui, root: &var Col| root.row(do |c: &var Col|

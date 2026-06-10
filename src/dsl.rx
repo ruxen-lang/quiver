@@ -286,6 +286,10 @@ class Col
     self.kinds.size as Int
   end
 
+  ## Ruby's `length` synonym for `size` — a pure `alias` (one body, zero extra
+  ## codegen), not a second method. Lets call sites read `col.length`.
+  alias length size
+
   ## A static text node: built once, never re-evaluated.
   def var text(label: &str) -> nil
     let id = self.size
@@ -302,7 +306,7 @@ class Col
   def var dyn_text(compute: any Fn[Fn(&var Ui) -> String]) -> nil
     let id = self.size
     self.kinds.push(kind_dyn_text())
-    self.labels.push(String.from(""))
+    self.labels.push("")
     self.compute_of.push(self.computes.size as Int)
     self.computes.push(compute)
     self.handler_of.push(-1)
@@ -331,7 +335,7 @@ class Col
   def var input(value: State[String], width: Int) -> nil
     let id = self.size
     self.kinds.push(kind_input())
-    self.labels.push(String.from(""))
+    self.labels.push("")
     self.compute_of.push(self.computes.size as Int)
     self.computes.push({ |ui2: &var Ui| value.get(ui2) })
     self.handler_of.push(-1)
@@ -355,9 +359,9 @@ class Col
     self.compute_of.push(self.computes.size as Int)
     self.computes.push({ |ui2: &var Ui|
       if state.get(ui2)
-        String.from("y")
+        "y"
       else
-        String.from("n")
+        "n"
       end
     })
     self.handler_of.push(self.handlers.size as Int)
@@ -377,7 +381,7 @@ class Col
   def var slider(state: State[Int], min: Int, max: Int, width: Int) -> nil
     let id = self.size
     self.kinds.push(kind_slider())
-    self.labels.push(String.from(""))
+    self.labels.push("")
     self.compute_of.push(self.computes.size as Int)
     self.computes.push({ |ui2: &var Ui| "#{state.get(ui2)}" })
     self.handler_of.push(-1)
@@ -399,7 +403,7 @@ class Col
   def var select(state: State[Int], options: Array[String], width: Int) -> nil
     let id = self.size
     self.kinds.push(kind_select())
-    self.labels.push(String.from(""))
+    self.labels.push("")
     self.compute_of.push(self.computes.size as Int)
     self.computes.push({ |ui2: &var Ui| "#{state.get(ui2)}" })
     self.handler_of.push(-1)
@@ -412,7 +416,7 @@ class Col
     while k < n
       match options.get(k)
         Some(s) -> self.option_strings.push(s.clone)
-        nil     -> self.option_strings.push(String.from(""))
+        nil     -> self.option_strings.push("")
       end
       k = k + 1
     end
@@ -420,39 +424,69 @@ class Col
     self.link(id)
   end
 
-  ## A horizontal container: the nodes built inside `build` become its
+  ## A horizontal container: the nodes built inside the block become its
   ## children and are stacked along the X axis by the layout pass.
-  def var row(build: any Fn[Fn(&var Col) -> nil]) -> nil
-    self.container(kind_row(), build)
+  ##
+  ##   root.row do |c|
+  ##     c.text("left")
+  ##     c.text("right")
+  ##   end
+  ##
+  ## The block is an IMMEDIATELY-INVOKED builder block (`&block` + `yield`): it
+  ## runs exactly once, here, while the cursor is on this container — it is never
+  ## stored. That is why it is a declared block (`do…end` / `{ }`) rather than a
+  ## stored closure param; stored callbacks (`dyn_text`, `button`) keep the
+  ## `{ |x| … }` brace form. See docs/DSL.md "Blocks & the do/brace idiom".
+  def var row(&block: Fn[(&var Col) -> nil]) -> nil
+    let prev = self.open_container(kind_row())
+    yield(&var *self)
+    self.close_container(prev)
   end
 
-  ## A vertical container: the nodes built inside `build` become its
+  ## A vertical container: the nodes built inside the block become its
   ## children and are stacked along the Y axis by the layout pass.
-  def var col(build: any Fn[Fn(&var Col) -> nil]) -> nil
-    self.container(kind_col(), build)
+  def var col(&block: Fn[(&var Col) -> nil]) -> nil
+    let prev = self.open_container(kind_col())
+    yield(&var *self)
+    self.close_container(prev)
   end
 
   ## A horizontal container with a `Style` (padding / background / border).
-  def var row_styled(style: Style, build: any Fn[Fn(&var Col) -> nil]) -> nil
+  ##
+  ##   root.row_styled(card_style) do |c| c.text("x") end
+  def var row_styled(style: Style, &block: Fn[(&var Col) -> nil]) -> nil
     let id = self.size
     self.store_style(id, &style)
-    self.container(kind_row(), build)
+    let prev = self.open_container(kind_row())
+    yield(&var *self)
+    self.close_container(prev)
   end
 
   ## A vertical container with a `Style` (padding / background / border).
-  def var col_styled(style: Style, build: any Fn[Fn(&var Col) -> nil]) -> nil
+  def var col_styled(style: Style, &block: Fn[(&var Col) -> nil]) -> nil
     let id = self.size
     self.store_style(id, &style)
-    self.container(kind_col(), build)
+    let prev = self.open_container(kind_col())
+    yield(&var *self)
+    self.close_container(prev)
   end
 
   ## A vertically-scrolling list: a `Col`-like container with a FIXED viewport
   ## height. Children stack on Y but are clipped to `viewport_h` and scrolled by
   ## an offset (App.scroll_to / scroll_by) when the content overflows.
-  def var list(viewport_h: Int, build: any Fn[Fn(&var Col) -> nil]) -> nil
+  ##
+  ## The builder block is OPTIONAL (`block_defined?`): `root.list(h)` with no
+  ## block builds an empty scrollable region (a fixed-height placeholder), while
+  ## `root.list(h) do |c| … end` fills it. The empty form is the genuine
+  ## optional-block case — a reserved viewport whose rows arrive later.
+  def var list(viewport_h: Int, &block: Fn[(&var Col) -> nil]) -> nil
     let id = self.size
     self.viewport_of.insert(id, viewport_h)
-    self.container(kind_list(), build)
+    let prev = self.open_container(kind_list())
+    if block_defined?
+      yield(&var *self)
+    end
+    self.close_container(prev)
   end
 
   ## A REACTIVE list: like `list`, but its children are built from a shared
@@ -465,11 +499,18 @@ class Col
   ##
   ## The node is a tracking scope: its compute reads `model.version`, so a
   ## mutation (which bumps the version) marks this node dirty; `App.flush`
-  ## rebuilds its child subtree. The closures here use `{ … }` braces.
+  ## rebuilds its child subtree.
+  ##
+  ## `item_builder` is a STORED closure param, NOT a `&block` — unlike `row`/
+  ## `col`/`list` (which yield their block ONCE at build time), a `list_of`
+  ## RE-INVOKES this builder on every rebuild (it lives in the `item_builders`
+  ## pool, re-run by `App.rebuild_list`). A `&block` slot is for yield-time use;
+  ## storing a block is a different lifetime story, so this stays a `{ |c, m, i|
+  ## … }` brace closure. See docs/DSL.md "Blocks & the do/brace idiom".
   def var list_of(model: ListModel, viewport_h: Int, item_builder: any Fn[Fn(&var Col, ListModel, Int) -> nil]) -> nil
     let id = self.size
     self.kinds.push(kind_list_of())
-    self.labels.push(String.from(""))
+    self.labels.push("")
     # No compute closure: a list_of subscribes to its model's version
     # IMPERATIVELY in `App.refresh_node` (storing the model once in the pool —
     # `model` is non-Copy, so it can only be used once here).
@@ -643,14 +684,14 @@ class Col
       nil     -> -1
     end
     if start < 0
-      return String.from("")
+      return ""
     end
     if k < 0 || k >= self.option_count_at(i)
-      return String.from("")
+      return ""
     end
     match self.option_strings.get(start + k)
       Some(s) -> s.clone
-      nil     -> String.from("")
+      nil     -> ""
     end
   end
 
@@ -708,7 +749,7 @@ class Col
   def label_at(i: Int) -> String
     match self.labels.get(i)
       Some(s) -> s.clone
-      nil     -> String.from("")
+      nil     -> ""
     end
   end
 
@@ -866,19 +907,27 @@ class Col
     self.child_last.insert(cid, id)
   end
 
-  ## Build a container node of `kind`, then run `build` with the cursor moved
-  ## onto it so the nodes it appends become this container's children. The
-  ## cursor is restored afterward, so containers nest to any depth.
-  def var container(kind: Int, build: any Fn[Fn(&var Col) -> nil]) -> nil
+  ## Push a container node of `kind`, link it, and move the build cursor ONTO it
+  ## so subsequent appends become its children. Returns the PREVIOUS cursor for
+  ## the matching `close_container`. The public container builders bracket their
+  ## `yield` between `open_container` / `close_container` rather than forwarding a
+  ## block to a shared helper — block-forwarding (`g(&block)`) is a staged ruxen
+  ## feature (ruby-block ADR, "Out of scope"), so each builder yields directly.
+  def var open_container(kind: Int) -> Int
     let id = self.size
     self.kinds.push(kind)
-    self.labels.push(String.from(""))
+    self.labels.push("")
     self.compute_of.push(-1)
     self.handler_of.push(-1)
     self.link(id)
     let prev = self.parent_cursor
     self.parent_cursor = id
-    build.(&var *self)
+    prev
+  end
+
+  ## Restore the build cursor saved by `open_container`, so containers nest to
+  ## any depth.
+  def var close_container(prev: Int) -> nil
     self.parent_cursor = prev
   end
 

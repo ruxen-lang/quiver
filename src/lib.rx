@@ -223,11 +223,16 @@ class ListModel
     self.cell.get.labels.size as Int
   end
 
+  ## Ruby synonyms for `count` — pure `alias`es (one body), so a caller can read
+  ## `model.size` / `model.length` as well as `model.count`.
+  alias size count
+  alias length count
+
   ## Label of item `k`, or "" out of range.
   def label_at(k: Int) -> String
     match self.cell.get.labels.get(k)
       Some(s) -> s.clone
-      nil     -> String.from("")
+      nil     -> ""
     end
   end
 

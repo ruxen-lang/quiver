@@ -40,8 +40,8 @@ Tester.describe("container styling — padding / background / border") do |t: &v
     var surface = RecordingSurface.new
     paint_all(&app, &var surface)
     t.expect(surface.size).to_eq(2)
-    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
-    t.expect(surface.command_at(1)).to_eq(String.from("text('x',4,16)"))
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    t.expect(surface.command_at(1)).to_eq("text('x',4,16)")
   end
 
   t.it("paint records the background fill, then the border, then the child") do
@@ -50,13 +50,13 @@ Tester.describe("container styling — padding / background / border") do |t: &v
     paint_all(&app, &var surface)
     # clear + bg round-rect + border stroke + child text  = 4 commands
     t.expect(surface.size).to_eq(4)
-    t.expect(surface.command_at(0)).to_eq(String.from("clear(255,255,255)"))
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
     # background fills the full row box (x=0,y=0, w grown, h grown), radius 4
-    t.expect(surface.command_at(1)).to_eq(String.from("round_rect(0,0,#{w_for.(1) + 16},#{row_height() + 16},4,200,200,200)"))
+    t.expect(surface.command_at(1)).to_eq("round_rect(0,0,#{w_for.(1) + 16},#{row_height() + 16},4,200,200,200)")
     # border strokes the same box, 2px, radius 4, blue
-    t.expect(surface.command_at(2)).to_eq(String.from("stroke_rect(0,0,#{w_for.(1) + 16},#{row_height() + 16},4,2,0,0,255)"))
+    t.expect(surface.command_at(2)).to_eq("stroke_rect(0,0,#{w_for.(1) + 16},#{row_height() + 16},4,2,0,0,255)")
     # the child text paints ON TOP, inset by the padding (baseline 8 + 16)
-    t.expect(surface.command_at(3)).to_eq(String.from("text('x',12,24)"))
+    t.expect(surface.command_at(3)).to_eq("text('x',12,24)")
   end
 
   t.it("structured ops expose radius + stroke width for replay") do
