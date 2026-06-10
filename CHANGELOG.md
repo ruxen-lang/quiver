@@ -7,6 +7,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **Owned-`String` label params (drop the last 5 `String.from` sites).** Post-Q38
+  a bare/interpolated literal IS an owned `String`, so the label-taking builders
+  `Col.text` / `Col.button` / `Col.checkbox` and `ListModel.seed` / `add` now take
+  `label: String` (by value) instead of `label: &str` + a `String.from(label)`
+  copy. Every call site passes a literal, which coerces directly — no `.clone`
+  needed anywhere. `String.from` is now entirely gone from `src/`. No
+  runtime-behaviour change; suite stays **157**, all three examples build.
 - **DSL adopts Ruby blocks + `alias`; bare string literals replace
   `String.from("…")`.** An idiom migration (no runtime-behaviour change — the
   build-once invariant holds):

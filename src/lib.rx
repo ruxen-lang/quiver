@@ -262,16 +262,16 @@ class ListModel
 
   ## Seed an item WITHOUT bumping the version — for initial population during
   ## build (the list mounts from these; no flush has happened yet).
-  def seed(label: &str) -> nil
+  def seed(label: String) -> nil
     let d = self.cell.get
-    d.labels.push(String.from(label))
+    d.labels.push(label)
     d.done.push(false)
   end
 
   ## Append an item and trigger a rebuild on the next flush.
-  def add(ui: &var Ui, label: &str) -> nil
+  def add(ui: &var Ui, label: String) -> nil
     let d = self.cell.get
-    d.labels.push(String.from(label))
+    d.labels.push(label)
     d.done.push(false)
     self.bump(&var *ui)
   end

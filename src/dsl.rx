@@ -290,11 +290,13 @@ class Col
   ## codegen), not a second method. Lets call sites read `col.length`.
   alias length size
 
-  ## A static text node: built once, never re-evaluated.
-  def var text(label: &str) -> nil
+  ## A static text node: built once, never re-evaluated. `label` is taken by
+  ## value (owned `String`): a bare/interpolated literal coerces to `String`
+  ## post-Q38, so call sites pass `c.text("x")` directly (no `String.from`).
+  def var text(label: String) -> nil
     let id = self.size
     self.kinds.push(kind_text())
-    self.labels.push(String.from(label))
+    self.labels.push(label)
     self.compute_of.push(-1)
     self.handler_of.push(-1)
     self.link(id)
@@ -313,11 +315,12 @@ class Col
     self.link(id)
   end
 
-  ## A button with a static label and a stored click handler.
-  def var button(label: &str, on_click: any Fn[Fn(&var Ui) -> nil]) -> nil
+  ## A button with a static label and a stored click handler. `label` is owned
+  ## `String` (a literal coerces post-Q38).
+  def var button(label: String, on_click: any Fn[Fn(&var Ui) -> nil]) -> nil
     let id = self.size
     self.kinds.push(kind_button())
-    self.labels.push(String.from(label))
+    self.labels.push(label)
     self.compute_of.push(-1)
     self.handler_of.push(self.handlers.size as Int)
     self.handlers.push(on_click)
@@ -352,10 +355,10 @@ class Col
   ##
   ##   let agree = ui.state_bool(false)
   ##   root.checkbox(agree, "I agree")
-  def var checkbox(state: State[Bool], label: &str) -> nil
+  def var checkbox(state: State[Bool], label: String) -> nil
     let id = self.size
     self.kinds.push(kind_checkbox())
-    self.labels.push(String.from(label))
+    self.labels.push(label)
     self.compute_of.push(self.computes.size as Int)
     self.computes.push({ |ui2: &var Ui|
       if state.get(ui2)
