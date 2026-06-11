@@ -21,8 +21,8 @@
 ##   - `row({ |c| ... })` / `col({ |c| ... })` -> a CONTAINER node; the nodes
 ##                                 built inside the block become its children.
 ##
-## (`text` and `dyn_text` are distinct methods, not overloads of one name:
-## ruxen v1 miscompiles &str-vs-closure overloads.)
+## (`text` and `dyn_text` are distinct methods by design — the name says
+## static vs reactive at the call site.)
 ## Node kinds. (Plain Int constants; a `Kind` enum would also work but Int
 ## keeps the parallel arrays trivially comparable in tests.)
 def kind_text -> Int { 1 }
