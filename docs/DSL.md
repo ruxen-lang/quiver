@@ -459,6 +459,47 @@ press-drag-release (today the slider) captures on `pointer_down`, is driven by
 every `pointer_move` until `pointer_up`. The windowed shell forwards real
 `PointerMove`/`PointerUp` into these, the same way it forwards scroll/keys.
 
+### F2: pixel scroll, fling, the clock seam, and `tick` (`docs/LAYOUT.md`)
+
+Scrolling is in **pixels**. A wheel `scroll(dx, dy)` moves `scroll_line` px per
+click (default `row_height`; `set_scroll_line(px)` overrides, `scroll_line_px`
+reads it). The Int App boundary is deliberate — deterministic and headless —
+so the shell quantizes canvas's `Float32` wheel deltas to Int clicks before
+calling. `scroll_to`/`scroll_by` take pixel offsets directly.
+
+**Drag-to-scroll + fling momentum.** A `pointer_down` that lands in a scrollable
+list's viewport but **not** on an interactive child captures that list;
+`pointer_move` then scrolls it by the drag delta and tracks velocity;
+`pointer_up` seeds a fling. The shell calls **`App.tick`** once per frame (before
+repaint): it steps each active fling (`offset += v`, then `v *= ~0.92`) until the
+velocity falls below threshold or the scroll clamps at an end, and returns `true`
+while anything is still moving (so the shell keeps drawing). `tick` also fires
+due long-presses.
+
+**The clock seam** (mirrors `set_measure`): `set_clock({ || Int })` injects a
+monotonic-ms timebase. With none injected, `now` returns a frame counter that
+`tick` advances — so fling + long-press are **exactly reproducible** in tests
+without a real clock. `clocked?` reports which is active. Inject the real clock
+in the shell binary (`app.set_clock({ || canvas.now_ms })`), never in quiver.
+
+**Tap vs long-press.** A press fires button/checkbox handlers immediately — a
+click IS a tap (unchanged). For a long-press, attach a handler to the
+just-built node with `c.long_press({ |ui| … })`:
+
+```ruxen
+c.button("item", { |ui| open(ui) })
+c.long_press({ |ui| open_context_menu(ui) })   # decorates the button above
+```
+
+`long_press` is the **one post-hoc modifier** in the DSL — every builder returns
+`nil` (the arena is push-only, no node handle to chain on), so a gesture handler
+attaches by node id to `self.size - 1`. It is a STORED `{ |ui| … }` closure (the
+brace idiom — re-invoked when a long-press fires), in a `long_press_handlers`
+pool. `tick` fires it once when the press is held past `long_press_ms` without
+moving past `gesture_slop`; a move past slop or an up before the threshold
+cancels it (→ a plain tap). Long-press nodes are hit-testable. Pinned by
+`tests/scroll_gestures.rx`. Double-tap is deferred.
+
 ### `Slider`
 
 `slider` is a draggable horizontal control bound to a reactive `State[Int]`
@@ -602,6 +643,10 @@ quiver consumes the events, the shell never interprets them:
 | `Scroll(dx, dy)` | `scroll(dx, dy)` | wheel → scroll the innermost hovered list |
 | `Resize(w, h)` | `resize(w, h)` | record design size + re-arrange |
 | `CloseRequested` | (quit the loop) | |
+
+Plus, once per frame **before repaint**, the loop calls `app.tick` (advances the
+fling/long-press clock; flush + repaint when it returns `true`) and, on a real
+shell, `app.set_clock({ || canvas.now_ms })` once at startup.
 
 The split that matters: **`TextInput` is the only path that adds text** (it
 carries the OS-composed, shift/layout-correct codepoint — `'A'`=65, `'é'`=233),

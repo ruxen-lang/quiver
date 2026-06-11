@@ -123,9 +123,17 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
 
 **F2 — gestures & real scrolling:** (in progress — see below)
 
-- [ ] Pixel-based scrolling
-- [ ] Velocity + fling momentum (injected clock seam)
-- [ ] Tap vs long-press recognizers
+- [x] **Pixel-based scrolling** — `scroll(dx, dy)` moves `scroll_line` px/click
+      (default `row_height`; `set_scroll_line` overrides). App boundary stays Int.
+      Pinned by `tests/scroll_gestures.rx`.
+- [x] **Velocity + fling momentum** — injected clock seam (`set_clock`, default =
+      deterministic frame counter advanced by `tick`); drag-scroll captures a list,
+      tracks velocity, `pointer_up` seeds a fling, `App.tick` steps + decays it
+      (clamped at ends). Pinned by `tests/scroll_gestures.rx`.
+- [x] **Tap vs long-press recognizers** — tap = immediate handler (unchanged);
+      long-press via `c.long_press({ |ui| … })` (attaches to last-built node),
+      fired by `tick` past `long_press_ms` within `gesture_slop`. Pinned by
+      `tests/scroll_gestures.rx`.
 - [ ] Scrollbars (paint-only)
 - [ ] Horizontal scroll
 

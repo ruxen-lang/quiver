@@ -7,6 +7,37 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **F2 gestures & scrolling (1/2) — pixel scroll, fling momentum, tap vs
+  long-press** (`docs/LAYOUT.md` F2). Built on an injected clock seam that
+  mirrors `set_measure`, so all of it is deterministic and headless-pinnable.
+  - **Pixel-based wheel scroll.** `App.scroll(dx, dy)` now moves `scroll_line`
+    px per wheel click (default `row_height`; `set_scroll_line(px)` overrides,
+    `scroll_line_px` reads it). The App boundary stays Int (the shell quantizes
+    canvas's Float32 wheel deltas to Int clicks); the line factor multiplies
+    before clamping. `scroll_to`/`scroll_by` already took pixel offsets — unchanged.
+  - **Clock seam.** `App.set_clock({ || Int })` injects a monotonic-ms timebase
+    (0-or-1-entry pool + `has_clock`, not `Option[any Fn]`). With none injected,
+    `now` returns a frame counter that `tick` advances — fully deterministic in
+    tests. `clocked?` reports which is active.
+  - **Drag-scroll + fling.** A press that lands in a scrollable list's viewport
+    (not on an inner widget) captures it; `pointer_move` scrolls it by the drag
+    delta and tracks velocity over the clock; `pointer_up` seeds a fling. The new
+    per-frame `App.tick` (the shell loop calls it) steps each active fling
+    (`offset += v`, `v *= 0.92`) until below threshold or clamped at an end, and
+    returns whether anything changed (so the shell keeps drawing). Generalised
+    pointer capture: `scroll_captured` (a list) is distinct from `captured` (a
+    slider).
+  - **Tap vs long-press recognizers.** A press fires button/checkbox handlers
+    immediately (a click IS a tap — unchanged). A new `c.long_press({ |ui| … })`
+    DSL modifier attaches a STORED handler to the LAST-built node (the one
+    post-hoc modifier — the arena is push-only, so a gesture handler attaches by
+    node id; lives in a `long_press_handlers` pool). `tick` fires it once when the
+    press is held past `long_press_ms` without moving past `gesture_slop`; a
+    move-past-slop or early up cancels it. Long-press nodes are hit-testable
+    (`interactive_at`).
+  - Pins: `tests/scroll_gestures.rx` (10 — pixel scroll, clock default/injected,
+    drag-scroll, deterministic fling decay + end-clamp, tap, long-press fire +
+    slop-cancel). Suite **176 → 186**; all three examples build.
 - **F1 layout completeness — flex grow, alignment, gap, per-side padding,
   stack** (the deferred half of the own-flex ADR, `docs/LAYOUT.md` F1 addendum).
   All additive on the existing two-phase `measure`/`place` recursion in

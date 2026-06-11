@@ -46,6 +46,24 @@ def key_home -> Int { 1073741898 }
 
 def key_end -> Int { 1073741901 }
 
+## --- F2 gesture/fling tuning (docs/LAYOUT.md F2) ---
+## Fling decay numerator/denominator per `tick`: velocity *= num/den each step
+## (≈ 0.92). Integer ratio so stepping is deterministic under the fake clock.
+def fling_decay_num -> Int { 92 }
+
+def fling_decay_den -> Int { 100 }
+
+## Fling stops when |velocity| drops below this (px per tick).
+def fling_min_v -> Int { 1 }
+
+## Long-press fires when the pointer is held at least this many clock units
+## without moving past the slop radius.
+def long_press_ms -> Int { 500 }
+
+## Tap/long-press movement slop (px): a pointer move farther than this from the
+## press point cancels the long-press (it becomes a drag).
+def gesture_slop -> Int { 6 }
+
 class App
   ui: Ui
   root: Col
@@ -70,6 +88,19 @@ class App
   design_h: Int
   measure_fns: Array[any Fn[Fn(String, Int) -> Int]]
   has_measure: Bool
+  scroll_line: Int
+  clock_fns: Array[any Fn[Fn() -> Int]]
+  has_clock: Bool
+  frame_counter: Int
+  fling_v: Hash[Int, Int]
+  drag_last_pos: Int
+  drag_last_time: Int
+  drag_v: Int
+  scroll_captured: Int
+  lp_node: Int
+  lp_time: Int
+  lp_x: Int
+  lp_y: Int
 
   def init
     self.ui = Ui.new
@@ -95,6 +126,19 @@ class App
     self.design_h = 0
     self.measure_fns = Array.new
     self.has_measure = false
+    self.scroll_line = row_height()
+    self.clock_fns = Array.new
+    self.has_clock = false
+    self.frame_counter = 0
+    self.fling_v = Hash.new
+    self.drag_last_pos = 0
+    self.drag_last_time = 0
+    self.drag_v = 0
+    self.scroll_captured = -1
+    self.lp_node = -1
+    self.lp_time = 0
+    self.lp_x = 0
+    self.lp_y = 0
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -682,12 +726,19 @@ class App
 
   ## Recursive hit-test for the subtree rooted at `i`. `(ox, oy)` is the
   ## accumulated content offset: a screen point maps to THIS level's content
+  ## True when node `i` is interactive — a click handler, input, slider, select,
+  ## or a long-press handler — so `hit_test` should match it.
+  def interactive_at(i: Int) -> Bool
+    self.root.handler_at(i) >= 0 || self.root.input_at(i) || self.root.slider_at(i) ||
+    self.root.select_at(i) ||
+    self.root.long_press_at(i) >= 0
+  end
+
   ## space as `(x + ox, y + oy)`. Returns the first interactive hit, or -1.
   def hit_tree(i: Int, x: Int, y: Int, ox: Int, oy: Int) -> Int
     let px = x + ox
     let py = y + oy
-    if self.root.handler_at(i) >= 0 || self.root.input_at(i) || self.root.slider_at(i) ||
-    self.root.select_at(i)
+    if self.interactive_at(i)
       if self.contains(i, px, py)
         return i
       end
@@ -806,10 +857,41 @@ class App
       elsif self.root.select_at(i)
         self.open_overlay(i, self.x_of(i), self.y_of(i) + self.h_of(i))
       else
+        self.arm_long_press(i, x, y)
         self.click(i)
       end
     end
+    if i < 0
+      self.begin_scroll_drag(x, y)
+    end
     i
+  end
+
+  ## Arm a long-press on node `i` if it has a long-press handler: record the press
+  ## node, clock, and point. `tick` fires it once if the pointer is held past the
+  ## threshold without moving past slop; a move-past-slop or an early up disarms.
+  def var arm_long_press(i: Int, x: Int, y: Int) -> nil
+    if self.root.long_press_at(i) < 0
+      return
+    end
+    self.lp_node = i
+    self.lp_time = self.now
+    self.lp_x = x
+    self.lp_y = y
+  end
+
+  ## Begin a drag-scroll: capture the innermost scrollable list under (x, y) and
+  ## seed velocity tracking; cancel any in-flight fling on it. No-op if no list.
+  def var begin_scroll_drag(x: Int, y: Int) -> nil
+    let list = self.list_under(x, y)
+    if list < 0
+      return
+    end
+    self.scroll_captured = list
+    self.fling_v.insert(list, 0)
+    self.drag_last_pos = y
+    self.drag_last_time = self.now
+    self.drag_v = 0
   end
 
   ## Open the overlay owned by node `owner`, anchored at screen (x, y).
@@ -833,6 +915,11 @@ class App
     self.hover_x = x
     self.hover_y = y
     self.hovered = true
+    self.long_press_check_slop(x, y)
+    if self.scroll_captured >= 0
+      self.drag_scroll(x, y)
+      return self.scroll_captured
+    end
     if self.captured < 0
       return -1
     end
@@ -842,8 +929,43 @@ class App
     self.captured
   end
 
-  ## A pointer-up event: release any capture.
-  def var pointer_up(x: Int, y: Int) -> nil { self.captured = -1 }
+  ## Drive the captured list's drag-scroll from pointer y: scroll by the delta
+  ## since the last sample (a drag DOWN reveals content ABOVE → offset decreases),
+  ## and update the running velocity (px per clock unit) over this sample.
+  def var drag_scroll(x: Int, y: Int) -> nil
+    let list = self.scroll_captured
+    let dy = y - self.drag_last_pos
+    self.scroll_by(list, 0 - dy)
+    let t = self.now
+    let dt = t - self.drag_last_time
+    if dt > 0
+      self.drag_v = (0 - dy) / dt
+    end
+    self.drag_last_pos = y
+    self.drag_last_time = t
+  end
+
+  ## Disarm an armed long-press if the pointer has moved past the slop radius.
+  def var long_press_check_slop(x: Int, y: Int) -> nil
+    if self.lp_node < 0
+      return
+    end
+    if App.past_slop(x - self.lp_x, y - self.lp_y)
+      self.lp_node = -1
+    end
+  end
+
+  ## A pointer-up event: release a slider capture; for a captured list, seed its
+  ## fling from the last drag velocity; disarm any pending long-press (an up
+  ## before the threshold is a plain tap, already handled on down).
+  def var pointer_up(x: Int, y: Int) -> nil
+    self.captured = -1
+    self.lp_node = -1
+    if self.scroll_captured >= 0
+      self.fling_v.insert(self.scroll_captured, self.drag_v)
+      self.scroll_captured = -1
+    end
+  end
 
   ## The node currently capturing the pointer, or -1.
   def captured_node -> Int { self.captured }
@@ -956,9 +1078,13 @@ class App
   end
 
   ## A mouse-wheel event: scroll the innermost scrollable `list` under the last
-  ## hovered point by the wheel delta. `+dy` is wheel up/away → scroll content
-  ## UP (toward the top) → DECREASE the offset; `-dy` (wheel down) increases it.
-  ## One wheel click = one row step. No-op if nothing scrollable is hovered.
+  ## hovered point by the wheel delta, in PIXELS. `+dy` is wheel up/away → scroll
+  ## content UP (toward the top) → DECREASE the offset; `-dy` (wheel down)
+  ## increases it. Each wheel click moves `scroll_line` px (default = row_height;
+  ## `set_scroll_line` overrides). The Int delta is multiplied by the line factor
+  ## here — the App boundary stays Int (deterministic / headless-pinnable); the
+  ## shell quantizes canvas's Float32 wheel deltas to Int clicks before calling.
+  ## No-op if nothing scrollable is hovered.
   def var scroll(dx: Int, dy: Int) -> nil
     if !self.hovered
       return
@@ -967,7 +1093,138 @@ class App
     if list < 0
       return
     end
-    self.scroll_by(list, 0 - dy * row_height())
+    self.scroll_by(list, 0 - dy * self.scroll_line)
+  end
+
+  ## Set the wheel scroll line-height factor (px per wheel click). Default
+  ## `row_height`. A wheel `scroll(0, n)` then moves `n * px`.
+  def var set_scroll_line(px: Int) -> nil { self.scroll_line = px }
+
+  ## Pixels per wheel click (the current line-height factor).
+  def scroll_line_px -> Int { self.scroll_line }
+
+  ## Inject the monotonic clock seam (mirrors `set_measure`): a closure
+  ## `{ || Int }` returning a monotonic timestamp (ms). The shell supplies a real
+  ## clock; with none injected, `now` returns the deterministic frame counter that
+  ## `tick` advances, so fling + long-press are exactly reproducible in tests.
+  ##
+  ##   app.set_clock({ || canvas.now_ms })
+  def var set_clock(f: any Fn[Fn() -> Int]) -> nil
+    self.clock_fns = Array.new
+    self.clock_fns.push(f)
+    self.has_clock = true
+  end
+
+  ## Whether a real clock has been injected (else the deterministic counter).
+  def clocked? -> Bool { self.has_clock }
+
+  ## Current monotonic time: the injected clock, else the frame counter.
+  def now -> Int
+    if self.has_clock
+      match self.clock_fns.get(0)
+        Some(f) -> return f.()
+        nil -> nil
+      end
+    end
+    self.frame_counter
+  end
+
+  ## Per-frame step the shell's loop calls once per frame BEFORE repaint: advance
+  ## the deterministic clock, step any active flings, and fire a long-press whose
+  ## hold time has elapsed. Returns true when something changed (a fling advanced
+  ## or a long-press fired) so the shell knows to flush/repaint and keep ticking.
+  def var tick -> Bool
+    if !self.has_clock
+      self.frame_counter = self.frame_counter + 1
+    end
+    var changed = self.step_flings
+    if self.fire_long_press
+      changed = true
+    end
+    changed
+  end
+
+  ## Advance every active fling by one step: `offset += v` (clamped), then decay
+  ## `v *= decay`; drop the fling when |v| falls below the threshold OR the scroll
+  ## clamped (hit an end). Returns true if any fling moved.
+  def var step_flings -> Bool
+    var moved = false
+    for list in self.fling_v.keys
+      let v = self.fling_value(list)
+      if v == 0
+
+      else
+        let before = self.scroll_of(list)
+        self.scroll_by(list, v)
+        let after = self.scroll_of(list)
+        if after != before
+          moved = true
+        end
+        var nv = v * fling_decay_num() / fling_decay_den()
+        if App.below_min(nv) || after == before
+          nv = 0
+        end
+        self.fling_v.insert(list, nv)
+      end
+    end
+    moved
+  end
+
+  ## Fire an armed long-press whose hold time has elapsed (and disarm). Returns
+  ## true if one fired. The press point's slop was checked on each move.
+  def var fire_long_press -> Bool
+    if self.lp_node < 0
+      return false
+    end
+    if self.now - self.lp_time < long_press_ms()
+      return false
+    end
+    let node = self.lp_node
+    self.lp_node = -1
+    self.run_long_press(node)
+    true
+  end
+
+  ## The active fling velocity of list `i` (0 if none).
+  def fling_value(i: Int) -> Int
+    match self.fling_v.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Whether |v| is below the fling stop threshold.
+  def self.below_min(v: Int) -> Bool
+    var a = v
+    if a < 0
+      a = 0 - a
+    end
+    a < fling_min_v()
+  end
+
+  ## Whether a (dx, dy) move exceeds the gesture slop radius (box approximation).
+  def self.past_slop(dx: Int, dy: Int) -> Bool
+    var ax = dx
+    if ax < 0
+      ax = 0 - ax
+    end
+    var ay = dy
+    if ay < 0
+      ay = 0 - ay
+    end
+    ax > gesture_slop() || ay > gesture_slop()
+  end
+
+  ## Run node `i`'s long-press handler (no-op when it has none).
+  def var run_long_press(i: Int) -> nil
+    let hi = self.root.long_press_at(i)
+    if hi < 0
+      return
+    end
+    match self.root.long_press_handlers.get(hi)
+      Some(f) -> f.(&var self.ui)
+      nil -> nil
+    end
   end
 
   ## A window-resize event: record the new design size and re-lay-out (the
