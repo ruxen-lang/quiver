@@ -7,6 +7,39 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **F4 — animation engine** (`docs/decisions/animation.md`): explicit tweens +
+  colour implicit transitions, stepped deterministically off the F2 clock seam
+  (`App.tick`). Default-inert — with no live animation every paint pin is
+  byte-identical.
+  - **Animatable set** (after auditing what paint consumes — `PaintSurface` is
+    Ints + &String, no opacity op): **geometry via a paint-time offset** (a
+    translate that shifts where a node draws — NOT a layout input, so no
+    re-arrange and siblings never move) + **colour** (RGB lerp into the existing
+    fill/text ops). Size/opacity deferred (filed).
+  - **Fixed-point curves** — linear / ease_in / ease_out / ease_in_out, per-mille
+    Int math (`anim_scale = 1000`); `ease` + `anim_lerp`. Clamp-to-end on
+    retirement → byte-exact landing, fully deterministic (no Float).
+  - **Registry** — flat **slot-keyed Hashes** + a free-list (`Array.insert` is
+    insert-and-shift in ruxen v1, not replace — so mutable rows live in Hashes
+    that update in place; `anim_count` is the slot high-water). A retired slot is
+    reused (row count never grows unbounded). Completion callbacks in an
+    `anim_callbacks` pool (never `Option[any Fn]`).
+  - **API** — `tween_offset` / `tween_color` (+ `_done` completion variants),
+    `animating?` / `animating_node?`, `transition_color` + `set_color` (colour
+    implicit transitions Tier-1). App-level (animations are runtime state, not
+    tree structure). A new tween on a node+channel supersedes the live one.
+  - **Stepping** — `App.tick` advances every live tween from the one clock delta
+    (fling + tween coexist); a node is marked dirty ONLY when its resolved value
+    actually moved (dirty-set exactness — non-animating siblings never repaint).
+  - **Paint** — colour-consuming draws read the override (default ⇒ intrinsic
+    colour); an animated offset wraps the subtree in a `push_translate` /
+    `pop_state` bracket (absent ⇒ no bracket). `paint_tree` split into
+    `paint_tree` (offset bracket) + `paint_subtree` (body).
+  - **Showcase** — `examples/settings`' Save button colour-pulses on click (flash
+    green-highlight, fade to grey via `tween_color`; the window loop already
+    `tick`s); pinned by an exact-mirror test. The settings shell also wires F3's
+    clipboard seam to canvas's `Window.clipboard_text` / `set_clipboard_text`.
+  - Suite **220 → 236** (`tests/animation.rx`, 16); all three examples build.
 - **F3 — production text editing** (`docs/decisions/text-editing.md`): the
   single-line `input` grew a full editing surface, all App-level runtime state
   reached through App entry points or injected seams (quiver stays canvas-free).

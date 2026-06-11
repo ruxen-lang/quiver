@@ -192,8 +192,40 @@ a modifier bitmask), multi-line selection rects across lines, measured-x column 
 up/down, soft wrap, textarea internal scroll, word-granularity moves, double-click
 word select.
 
-**F4 — animation system** (`docs/decisions/animation.md`): _in progress (this
-phase) — explicit tweens + colour implicit transitions on the clock seam._
+**F4 — animation system** (`docs/decisions/animation.md`): explicit tweens +
+colour implicit transitions on the F2 clock seam. Paint-time animation offset
+(never layout — no re-arrange, siblings unmoved); fixed-point per-mille curves
+(Int-only, deterministic); a flat slot-keyed-Hash registry with free-list reuse
++ a callback pool; stepped inside `App.tick` next to fling.
+
+- [x] **Explicit tweens** — `tween_offset` / `tween_color` (+ `_done` completion
+      variants). Offset = a paint-time translate; colour = three scalar channel
+      lerps. App-level (animations are runtime state, not tree structure). Pinned
+      by `tests/animation.rx`.
+- [x] **Curves** — linear / ease_in / ease_out / ease_in_out, fixed-point
+      per-mille (`ease`, `anim_lerp`). Clamp-to-end on retirement → byte-exact
+      landing. Pinned.
+- [x] **Stepping + retirement** — `App.tick` advances all live tweens from the one
+      clock delta; a finished tween clamps + fires its callback once + frees its
+      slot (reused by the next tween — the row count never grows unbounded).
+      Pinned.
+- [x] **Dirty-set exactness** — only a node whose resolved value actually moved is
+      marked dirty; non-animating siblings never repaint. Pinned.
+- [x] **Fling + tween coexistence** — both step from one tick. Pinned.
+- [x] **Colour implicit transitions (Tier-1)** — `transition_color(node, dur,
+      curve)` + `set_color(node, r,g,b)` animates from the current resolved colour
+      instead of snapping. Pinned.
+
+Suite **220 → 236**. **Showcase:** `examples/settings`' Save button colour-pulses
+on click (flash green-highlight, fade to grey via `tween_color`) — the window loop
+already calls `app.tick`, so it runs live; pinned by an exact-mirror test. The
+settings shell also wires F3's clipboard seam to canvas's system clipboard.
+
+**Deferred (filed):** size (w/h) tweens (a layout-input animation — per-frame
+re-arrange); opacity / group alpha (needs a `PaintSurface` opacity op — canvas has
+`save_layer_alpha`); repeat / yoyo / delay / spring curves; implicit offset +
+reactive-colour transitions; stagger / timeline sequencing; the todo row slide-in
+demo (lands naturally once offset transitions do).
 
 ### Foundation (unblocks the whole widget library — do first)
 

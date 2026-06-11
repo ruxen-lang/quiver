@@ -498,6 +498,47 @@ old behaviour). **Deferred (filed):** real keyboard modifiers (canvas gap),
 multi-line selection rects, measured-x column on up/down, soft wrap, textarea
 internal scroll, word-granularity moves, double-click word select.
 
+### F4: animation (`docs/decisions/animation.md`)
+
+Animation is **App-level runtime state** (like scroll/caret/capture), not tree
+structure — so there is no `Col` builder for it; you drive it through App calls,
+naming a node by id (the same way `scroll_to` / `place_caret` / `tween_*` do).
+It builds on the F2 clock seam: `App.tick` (which the window loop already calls
+each frame) advances every live tween from the one clock delta, alongside fling.
+Everything is **default-inert** — with no live animation, paint is byte-identical.
+
+| Call | Effect |
+|---|---|
+| `tween_offset(node, fx,fy, tx,ty, dur, curve)` | animate a **paint-time** offset (a translate — shifts where the node draws, NOT a layout move) |
+| `tween_color(node, fr,fg,fb, tr,tg,tb, dur, curve)` | animate a colour override (RGB lerp into the node's fill/text) |
+| `tween_offset_done(…, { \|ui\| … })` / `tween_color_done(…, { \|ui\| … })` | as above + a STORED completion closure fired **once** at retirement |
+| `transition_color(node, dur, curve)` + `set_color(node, r,g,b)` | implicit transition: a marked node animates from its current colour to the new one instead of snapping |
+| `animating?` / `animating_node?(node)` | liveness queries (`tick`'s bool return already drives the loop) |
+
+- **Curves** are `curve_linear` / `curve_ease_in` / `curve_ease_out` /
+  `curve_ease_in_out` — plain Int constants. Easing computes in **fixed-point
+  per-mille** (`ease(curve, p)` maps `p ∈ [0, anim_scale()=1000]` → eased; quiver's
+  design space is Int, so no Float). A tween **clamps to its end value byte-exact**
+  on retirement.
+- **Targeted repaint holds.** A tween marks **only** its node dirty (and only on
+  the ticks where the resolved value actually moved), so a colour/offset animation
+  repaints exactly that node — siblings never repaint. Offset is paint-time, so it
+  never re-`arrange`s.
+- **Completion closures are STORED** (`{ |ui| … }` brace idiom, pooled), fired
+  exactly once. A new tween on the same node+channel **supersedes** the live one.
+- **Stepping is deterministic** under the clock seam: N ticks after a tween starts
+  → a known fixed-point value sequence per curve. Pinned by `tests/animation.rx`
+  (16) — curve midpoints, retirement + slot reuse, dirty-set exactness, fling +
+  tween coexistence, completion-once, supersede, colour lerp, implicit transition.
+
+**Showcase:** `examples/settings`' Save button colour-pulses on click (flash to a
+green highlight, fade to grey via `tween_color`).
+
+**Deferred (filed):** size (w/h) tweens (a layout-input animation — per-frame
+re-arrange); opacity / group alpha (needs a `PaintSurface` opacity op — canvas
+has `save_layer_alpha`); repeat / yoyo / delay / spring curves; implicit offset +
+reactive-colour transitions; stagger / timeline sequencing.
+
 ### `Checkbox`
 
 `checkbox` is a clickable widget bound to a reactive `State[Bool]`:

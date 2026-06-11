@@ -83,6 +83,64 @@ def undo_group_ms -> Int { 400 }
 ## Marked (IME composition) underline thickness (px) drawn beneath marked text.
 def ime_underline_h -> Int { 2 }
 
+## --- F4 animation (docs/decisions/animation.md) ---
+## Curve progress is fixed-point per-mille: p, eased ∈ [0, ANIM_SCALE]. Int-only
+## math (quiver's design space is Int) — no Float, fully deterministic.
+def anim_scale -> Int { 1000 }
+
+## Easing curves (plain Int constants, the node-kind idiom).
+def curve_linear -> Int { 0 }
+
+def curve_ease_in -> Int { 1 }
+
+def curve_ease_out -> Int { 2 }
+
+def curve_ease_in_out -> Int { 3 }
+
+## Animated property channels — each a SCALAR Int lerp row in the registry. A
+## colour tween is three rows (r/g/b); an offset tween is one or two (x/y).
+def prop_off_x -> Int { 0 }
+
+def prop_off_y -> Int { 1 }
+
+def prop_col_r -> Int { 2 }
+
+def prop_col_g -> Int { 3 }
+
+def prop_col_b -> Int { 4 }
+
+## Map progress `p` ∈ [0, anim_scale] through easing `curve` → eased ∈ [0,
+## anim_scale]. Quadratic ease in/out; cubic-ish smoothness is deferred. All Int
+## fixed-point: worst-case rounding < 1 unit, and the caller clamps to the end
+## value on retirement so a finished tween lands byte-exact.
+def ease(curve: Int, p: Int) -> Int
+  var q = p
+  if q < 0
+    q = 0
+  end
+  if q > anim_scale()
+    q = anim_scale()
+  end
+  if curve == curve_ease_in()
+    return q * q / anim_scale()
+  end
+  if curve == curve_ease_out()
+    let inv = anim_scale() - q
+    return anim_scale() - inv * inv / anim_scale()
+  end
+  if curve == curve_ease_in_out()
+    if q < anim_scale() / 2
+      return 2 * q * q / anim_scale()
+    end
+    let inv = anim_scale() - q
+    return anim_scale() - 2 * inv * inv / anim_scale()
+  end
+  q
+end
+
+## Lerp `from`→`to` at eased progress `e` ∈ [0, anim_scale]: from + (to-from)*e/scale.
+def anim_lerp(from: Int, to: Int, e: Int) -> Int { from + (to - from) * e / anim_scale() }
+
 class App
   ui: Ui
   root: Col
@@ -133,6 +191,26 @@ class App
   lp_time: Int
   lp_x: Int
   lp_y: Int
+  anim_count: Int
+  anim_node: Hash[Int, Int]
+  anim_prop: Hash[Int, Int]
+  anim_from: Hash[Int, Int]
+  anim_to: Hash[Int, Int]
+  anim_start: Hash[Int, Int]
+  anim_dur: Hash[Int, Int]
+  anim_curve: Hash[Int, Int]
+  anim_live: Hash[Int, Bool]
+  anim_cb: Hash[Int, Int]
+  anim_callbacks: Array[any Fn[Fn(&var Ui) -> nil]]
+  anim_off_x_of: Hash[Int, Int]
+  anim_off_y_of: Hash[Int, Int]
+  anim_col_r_of: Hash[Int, Int]
+  anim_col_g_of: Hash[Int, Int]
+  anim_col_b_of: Hash[Int, Int]
+  anim_has_col_of: Hash[Int, Bool]
+  trans_col_of: Hash[Int, Int]
+  trans_col_dur_of: Hash[Int, Int]
+  trans_col_curve_of: Hash[Int, Int]
 
   def init
     self.ui = Ui.new
@@ -184,6 +262,26 @@ class App
     self.lp_time = 0
     self.lp_x = 0
     self.lp_y = 0
+    self.anim_count = 0
+    self.anim_node = Hash.new
+    self.anim_prop = Hash.new
+    self.anim_from = Hash.new
+    self.anim_to = Hash.new
+    self.anim_start = Hash.new
+    self.anim_dur = Hash.new
+    self.anim_curve = Hash.new
+    self.anim_live = Hash.new
+    self.anim_cb = Hash.new
+    self.anim_callbacks = Array.new
+    self.anim_off_x_of = Hash.new
+    self.anim_off_y_of = Hash.new
+    self.anim_col_r_of = Hash.new
+    self.anim_col_g_of = Hash.new
+    self.anim_col_b_of = Hash.new
+    self.anim_has_col_of = Hash.new
+    self.trans_col_of = Hash.new
+    self.trans_col_dur_of = Hash.new
+    self.trans_col_curve_of = Hash.new
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -1514,14 +1612,19 @@ class App
   end
 
   ## Per-frame step the shell's loop calls once per frame BEFORE repaint: advance
-  ## the deterministic clock, step any active flings, and fire a long-press whose
-  ## hold time has elapsed. Returns true when something changed (a fling advanced
-  ## or a long-press fired) so the shell knows to flush/repaint and keep ticking.
+  ## the deterministic clock, step any active flings, step any live animations, and
+  ## fire a long-press whose hold time has elapsed. Returns true when something
+  ## changed (a fling advanced, an animation moved, or a long-press fired) so the
+  ## shell knows to flush/repaint and keep ticking. Fling + animation both step
+  ## from the ONE clock advance per tick (F4 — docs/decisions/animation.md).
   def var tick -> Bool
     if !self.has_clock
       self.frame_counter = self.frame_counter + 1
     end
     var changed = self.step_flings
+    if self.step_animations
+      changed = true
+    end
     if self.fire_long_press
       changed = true
     end
@@ -1567,6 +1670,196 @@ class App
     self.lp_node = -1
     self.run_long_press(node)
     true
+  end
+
+  ## --- F4 animation engine (docs/decisions/animation.md) ---
+  ## Tween `node`'s paint-time offset from (fx, fy) to (tx, ty) over `dur` clock
+  ## units with easing `curve`. The offset is a PAINT translate — it shifts where
+  ## the node draws without touching layout (no re-arrange, siblings unmoved). A
+  ## new tween on a node+channel supersedes any live one on that channel.
+  def var tween_offset(node: Int, fx: Int, fy: Int, tx: Int, ty: Int, dur: Int, curve: Int) -> nil
+    self.start_tween(node, prop_off_x(), fx, tx, dur, curve, -1)
+    self.start_tween(node, prop_off_y(), fy, ty, dur, curve, -1)
+  end
+
+  ## Tween `node`'s paint colour override from (fr,fg,fb) to (tr,tg,tb) over `dur`
+  ## clock units with easing `curve`. Three scalar channel rows (r/g/b); the
+  ## node's colour-consuming draws read the override while live. Marks the override
+  ## present so paint picks it up even before the first step.
+  def var tween_color(
+    node: Int,
+    fr: Int,
+    fg: Int,
+    fb: Int,
+    tr: Int,
+    tg: Int,
+    tb: Int,
+    dur: Int,
+    curve: Int,
+  ) -> nil
+    self.anim_has_col_of.insert(node, true)
+    self.anim_col_r_of.insert(node, fr)
+    self.anim_col_g_of.insert(node, fg)
+    self.anim_col_b_of.insert(node, fb)
+    self.start_tween(node, prop_col_r(), fr, tr, dur, curve, -1)
+    self.start_tween(node, prop_col_g(), fg, tg, dur, curve, -1)
+    self.start_tween(node, prop_col_b(), fb, tb, dur, curve, -1)
+  end
+
+  ## Like `tween_color`, with a STORED completion closure fired once when the tween
+  ## finishes (on the LAST — blue — channel, so it fires exactly once per colour
+  ## tween). The closure is the do/brace stored idiom, pooled in `anim_callbacks`.
+  def var tween_color_done(
+    node: Int,
+    fr: Int,
+    fg: Int,
+    fb: Int,
+    tr: Int,
+    tg: Int,
+    tb: Int,
+    dur: Int,
+    curve: Int,
+    done: any Fn[Fn(&var Ui) -> nil],
+  ) -> nil
+    self.anim_has_col_of.insert(node, true)
+    self.anim_col_r_of.insert(node, fr)
+    self.anim_col_g_of.insert(node, fg)
+    self.anim_col_b_of.insert(node, fb)
+    self.start_tween(node, prop_col_r(), fr, tr, dur, curve, -1)
+    self.start_tween(node, prop_col_g(), fg, tg, dur, curve, -1)
+    let cb = self.anim_callbacks.size as Int
+    self.anim_callbacks.push(done)
+    self.start_tween(node, prop_col_b(), fb, tb, dur, curve, cb)
+  end
+
+  ## Like `tween_offset`, with a STORED completion closure fired once (on the
+  ## y channel) when the tween finishes.
+  def var tween_offset_done(
+    node: Int,
+    fx: Int,
+    fy: Int,
+    tx: Int,
+    ty: Int,
+    dur: Int,
+    curve: Int,
+    done: any Fn[Fn(&var Ui) -> nil],
+  ) -> nil
+    self.start_tween(node, prop_off_x(), fx, tx, dur, curve, -1)
+    let cb = self.anim_callbacks.size as Int
+    self.anim_callbacks.push(done)
+    self.start_tween(node, prop_off_y(), fy, ty, dur, curve, cb)
+  end
+
+  ## Whether ANY animation is live (so a shell knows to keep drawing; `tick`'s
+  ## bool return already drives the loop, this is for queries).
+  def animating? -> Bool
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k)
+        return true
+      end
+      k = k + 1
+    end
+    false
+  end
+
+  ## Whether node `i` has any live animation.
+  def animating_node?(i: Int) -> Bool
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k) && self.anim_node_at(k) == i
+        return true
+      end
+      k = k + 1
+    end
+    false
+  end
+
+  ## Mark node `i` as colour-transitioning: a later `set_color(i, …)` animates from
+  ## the current resolved colour to the new one over `dur`/`curve` instead of
+  ## snapping (implicit transition, colour Tier-1). Offset transitions are filed.
+  def var transition_color(i: Int, dur: Int, curve: Int) -> nil
+    self.trans_col_of.insert(i, 1)
+    self.trans_col_dur_of.insert(i, dur)
+    self.trans_col_curve_of.insert(i, curve)
+  end
+
+  ## Set node `i`'s paint colour override to (r,g,b). If `i` is marked with
+  ## `transition_color`, ANIMATE from its current resolved colour to the new one;
+  ## else set it instantly. The implicit-animation surface.
+  def var set_color(i: Int, r: Int, g: Int, b: Int) -> nil
+    if self.transitions_color?(i)
+      let cr = self.anim_color_r_of(i, r)
+      let cg = self.anim_color_g_of(i, g)
+      let cb = self.anim_color_b_of(i, b)
+      let dur = self.trans_col_dur(i)
+      let curve = self.trans_col_curve(i)
+      self.tween_color(i, cr, cg, cb, r, g, b, dur, curve)
+    else
+      self.anim_has_col_of.insert(i, true)
+      self.anim_col_r_of.insert(i, r)
+      self.anim_col_g_of.insert(i, g)
+      self.anim_col_b_of.insert(i, b)
+      self.ui.mark_dirty(i)
+    end
+  end
+
+  ## Resolved animated x-offset (paint translate) of node `i`, 0 if none.
+  def anim_off_x(i: Int) -> Int
+    match self.anim_off_x_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Resolved animated y-offset (paint translate) of node `i`, 0 if none.
+  def anim_off_y(i: Int) -> Int
+    match self.anim_off_y_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Whether node `i` has an active animated/overridden colour.
+  def anim_has_color?(i: Int) -> Bool
+    match self.anim_has_col_of.get(i)
+      Some(v) -> *v
+      nil -> false
+    end
+  end
+
+  ## Resolved colour channel of node `i` (the override when present, else the
+  ## supplied default) — the one decision point paint uses for every coloured draw.
+  def anim_color_r_of(i: Int, default: Int) -> Int
+    self.anim_channel(self.anim_col_r_of.get(i), default)
+  end
+
+  def anim_color_g_of(i: Int, default: Int) -> Int
+    self.anim_channel(self.anim_col_g_of.get(i), default)
+  end
+
+  def anim_color_b_of(i: Int, default: Int) -> Int
+    self.anim_channel(self.anim_col_b_of.get(i), default)
+  end
+
+  ## The active animation count (live + retired rows) — for tests asserting slot
+  ## reuse (a retired slot is reused, so the row count does not grow unbounded).
+  def anim_row_count -> Int { self.anim_count }
+
+  ## Number of LIVE animation rows.
+  def anim_live_count -> Int
+    var c = 0
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k)
+        c = c + 1
+      end
+      k = k + 1
+    end
+    c
   end
 
   ## The active fling velocity of list `i` (0 if none).
@@ -1648,6 +1941,218 @@ class App
   def design_height -> Int { self.design_h }
 
   private
+
+  ## --- F4 animation engine internals ---
+  ## Start a tween row for (node, prop): supersede any live row on the same
+  ## node+channel (retire it, no double-step), then allocate a slot (reuse a dead
+  ## one — the free-list pool pattern) and fill it. `cb` is an `anim_callbacks`
+  ## index or -1. Seeds the resolved override with `from` so paint reads it pre-step.
+  def var start_tween(node: Int, prop: Int, from: Int, to: Int, dur: Int, curve: Int, cb: Int) -> nil
+    self.retire_channel(node, prop)
+    self.write_resolved(node, prop, from)
+    var slot = self.free_anim_slot
+    if slot < 0
+      slot = self.anim_count
+      self.anim_count = self.anim_count + 1
+    end
+    self.anim_node.insert(slot, node)
+    self.anim_prop.insert(slot, prop)
+    self.anim_from.insert(slot, from)
+    self.anim_to.insert(slot, to)
+    self.anim_start.insert(slot, self.now)
+    self.anim_dur.insert(slot, dur)
+    self.anim_curve.insert(slot, curve)
+    self.anim_live.insert(slot, true)
+    self.anim_cb.insert(slot, cb)
+    self.ui.mark_dirty(node)
+  end
+
+  ## Index of a retired (reusable) animation slot, or -1 (append a fresh row). The
+  ## arenas use `Array.insert` for slot reuse and `push` for growth, so the row
+  ## count never grows past the live high-water mark.
+  def free_anim_slot -> Int
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if !self.anim_live_at(k)
+        return k
+      end
+      k = k + 1
+    end
+    -1
+  end
+
+  ## Retire any LIVE row animating (node, prop) — supersede so a re-triggered tween
+  ## does not double-step. Does NOT fire the callback (it was superseded, not
+  ## completed).
+  def var retire_channel(node: Int, prop: Int) -> nil
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k) && self.anim_node_at(k) == node && self.anim_prop_at(k) == prop
+        self.anim_live.insert(k, false)
+      end
+      k = k + 1
+    end
+  end
+
+  ## Step every live animation by one clock tick: resolve each row's eased value,
+  ## write it into the node's override, mark the node dirty ONLY when its resolved
+  ## value actually changed (dirty-set exactness — non-animating siblings never
+  ## mark). A finished row clamps to `to`, fires its completion callback once, and
+  ## retires (slot reusable). Returns true if any row moved.
+  def var step_animations -> Bool
+    var moved = false
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k)
+        if self.step_anim_row(k)
+          moved = true
+        end
+      end
+      k = k + 1
+    end
+    moved
+  end
+
+  ## Step one live animation row `k`. Returns true if its resolved value changed.
+  def var step_anim_row(k: Int) -> Bool
+    let node = self.anim_node_at(k)
+    let prop = self.anim_prop_at(k)
+    let dur = self.anim_dur_at(k)
+    let elapsed = self.now - self.anim_start_at(k)
+    let before = self.resolved_value(node, prop)
+    if elapsed >= dur || dur <= 0
+      let endv = self.anim_to_at(k)
+      self.write_resolved(node, prop, endv)
+      self.anim_live.insert(k, false)
+      self.fire_anim_callback(k)
+      if endv != before
+        self.ui.mark_dirty(node)
+        return true
+      end
+      return false
+    end
+    var p = elapsed * anim_scale() / dur
+    let e = ease(self.anim_curve_at(k), p)
+    let v = anim_lerp(self.anim_from_at(k), self.anim_to_at(k), e)
+    self.write_resolved(node, prop, v)
+    if v != before
+      self.ui.mark_dirty(node)
+      return true
+    end
+    false
+  end
+
+  ## Fire animation row `k`'s completion callback (if any) exactly once.
+  def var fire_anim_callback(k: Int) -> nil
+    let ci = self.anim_cb_at(k)
+    if ci < 0
+      return
+    end
+    match self.anim_callbacks.get(ci)
+      Some(f) -> f.(&var self.ui)
+      nil -> nil
+    end
+  end
+
+  ## Write the resolved override for (node, prop) into the right channel hash.
+  def var write_resolved(node: Int, prop: Int, v: Int) -> nil
+    if prop == prop_off_x()
+      self.anim_off_x_of.insert(node, v)
+    elsif prop == prop_off_y()
+      self.anim_off_y_of.insert(node, v)
+    elsif prop == prop_col_r()
+      self.anim_col_r_of.insert(node, v)
+    elsif prop == prop_col_g()
+      self.anim_col_g_of.insert(node, v)
+    elsif prop == prop_col_b()
+      self.anim_col_b_of.insert(node, v)
+    end
+  end
+
+  ## The current resolved value of (node, prop) (0 default for offsets; the channel
+  ## override else). Used to detect a real change for dirty-set exactness.
+  def resolved_value(node: Int, prop: Int) -> Int
+    if prop == prop_off_x()
+      return self.anim_off_x(node)
+    end
+    if prop == prop_off_y()
+      return self.anim_off_y(node)
+    end
+    if prop == prop_col_r()
+      return self.anim_channel(self.anim_col_r_of.get(node), 0)
+    end
+    if prop == prop_col_g()
+      return self.anim_channel(self.anim_col_g_of.get(node), 0)
+    end
+    self.anim_channel(self.anim_col_b_of.get(node), 0)
+  end
+
+  ## Resolve an optional channel value to the override or the supplied default.
+  def anim_channel(opt: Option[Int], default: Int) -> Int
+    match opt
+      Some(v) -> *v
+      nil -> default
+    end
+  end
+
+  ## Liveness / row accessors (the slot-keyed Hash readers — `Array.insert` is
+  ## insert-and-shift in ruxen v1, NOT replace, so the mutable animation rows live
+  ## in slot-keyed Hashes that update in place; `anim_count` is the slot high-water).
+  def anim_live_at(k: Int) -> Bool
+    match self.anim_live.get(k)
+      Some(v) -> *v
+      nil -> false
+    end
+  end
+
+  def anim_node_at(k: Int) -> Int { self.anim_hash_at(self.anim_node.get(k)) }
+
+  def anim_prop_at(k: Int) -> Int { self.anim_hash_at(self.anim_prop.get(k)) }
+
+  def anim_from_at(k: Int) -> Int { self.anim_hash_at(self.anim_from.get(k)) }
+
+  def anim_to_at(k: Int) -> Int { self.anim_hash_at(self.anim_to.get(k)) }
+
+  def anim_start_at(k: Int) -> Int { self.anim_hash_at(self.anim_start.get(k)) }
+
+  def anim_dur_at(k: Int) -> Int { self.anim_hash_at(self.anim_dur.get(k)) }
+
+  def anim_curve_at(k: Int) -> Int { self.anim_hash_at(self.anim_curve.get(k)) }
+
+  def anim_cb_at(k: Int) -> Int { self.anim_hash_at(self.anim_cb.get(k)) }
+
+  ## Read an Int from a slot-keyed animation hash (-1 default sentinel).
+  def anim_hash_at(opt: Option[Int]) -> Int
+    match opt
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## Whether node `i` is marked for colour transitions.
+  def transitions_color?(i: Int) -> Bool
+    match self.trans_col_of.get(i)
+      Some(v) -> *v > 0
+      nil -> false
+    end
+  end
+
+  def trans_col_dur(i: Int) -> Int
+    match self.trans_col_dur_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def trans_col_curve(i: Int) -> Int
+    match self.trans_col_curve_of.get(i)
+      Some(v) -> *v
+      nil -> curve_linear()
+    end
+  end
 
   ## Clamp a desired scroll offset for list `i` to [0, content - viewport].
   ## Content shorter than the viewport pins the offset at 0.

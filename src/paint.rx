@@ -297,7 +297,10 @@ def paint_node[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   let x = app.x_of(i)
   let y = app.y_of(i)
   if app.root.kind_at(i) == kind_button()
-    surface.fill_rect(x, y, app.w_of(i), app.h_of(i), 200, 200, 200)
+    let br = app.anim_color_r_of(i, 200)
+    let bg = app.anim_color_g_of(i, 200)
+    let bb = app.anim_color_b_of(i, 200)
+    surface.fill_rect(x, y, app.w_of(i), app.h_of(i), br, bg, bb)
   end
   let label = app.text_of(i)
   surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
@@ -464,9 +467,9 @@ def paint_container_style[S: PaintSurface](app: &App, surface: &var S, i: Int) -
       w,
       h,
       radius,
-      app.root.bg_r_at(i),
-      app.root.bg_g_at(i),
-      app.root.bg_b_at(i),
+      app.anim_color_r_of(i, app.root.bg_r_at(i)),
+      app.anim_color_g_of(i, app.root.bg_g_at(i)),
+      app.anim_color_b_of(i, app.root.bg_b_at(i)),
     )
   end
   if app.root.has_border_at(i)
@@ -526,7 +529,27 @@ end
 ## Paint node `i` and (if a container) its children. A `List` wraps its children
 ## in `push_clip(viewport)` + `push_translate(0, -scroll)` and a closing
 ## `pop_state`, so off-viewport children are masked and content is shifted.
+##
+## An ANIMATED OFFSET (F4) wraps the WHOLE subtree in a `push_translate(dx, dy)` /
+## `pop_state` so the node and its children shift together as the tween advances —
+## a PAINT translate, not a layout move (geometry is untouched, siblings unmoved).
+## With no animated offset (the default) no bracket is emitted — byte-identical.
 def paint_tree[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  let ox = app.anim_off_x(i)
+  let oy = app.anim_off_y(i)
+  let animated = ox != 0 || oy != 0
+  if animated
+    surface.push_translate(ox, oy)
+  end
+  paint_subtree(app, surface, i)
+  if animated
+    surface.pop_state
+  end
+end
+
+## The body of `paint_tree` (node + list clip/scroll + children), separated so the
+## F4 animation-offset bracket can wrap it cleanly.
+def paint_subtree[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   paint_node(app, surface, i)
   if !app.root.container_at(i)
     return
@@ -576,6 +599,15 @@ end
 def paint_dirty[S: PaintSurface](app: &App, surface: &var S, nodes: &Array[Int]) -> nil
   for i in nodes
     surface.fill_rect(0, app.y_of(*i), app.span_w, app.h_of(*i), 255, 255, 255)
+    let ox = app.anim_off_x(*i)
+    let oy = app.anim_off_y(*i)
+    let animated = ox != 0 || oy != 0
+    if animated
+      surface.push_translate(ox, oy)
+    end
     paint_node(app, surface, *i)
+    if animated
+      surface.pop_state
+    end
   end
 end
