@@ -3,8 +3,6 @@
 # injected fake seam, selection-aware editing, IME marked text + commit, the
 # multi-line textarea caret navigation, and per-input undo. All headless: a fake
 # measure closure for selection geometry + a fake clipboard cell, no canvas.
-use std.sync.{Mutex, SharedSync}
-
 Tester.describe("F3 — selection, clipboard, IME, textarea, undo") do |t: &var Tester|
   let form = { || App.build(do |ui: &var Ui, root: &var Col|
         let name = ui.state_str("")
