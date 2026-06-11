@@ -1,0 +1,82 @@
+# Pins the F1 `stack` container (docs/LAYOUT.md F1 addendum): children all
+# occupy the stack box (z-order = build order), each optionally offset by its own
+# Style.offset(left, top). Children PAINT in build order (bottom→top) and
+# HIT-TEST in reverse (topmost wins). char_width()=8, pad_x()=4, row_height()=24.
+Tester.describe("F1 — stack / positioned overlap") do |t: &var Tester|
+  let w_for = { |chars: Int| chars * char_width() + pad_x() * 2 }
+  t.it("stack children all sit at the stack origin (no offset)") do ||
+    var app = App.build({ |ui: &var Ui, root: &var Col| root.stack() do |c: &var Col|
+          c.text("base")
+          c.text("x")
+        end })
+    t.expect(app.x_of(1)).to_eq(0)
+    t.expect(app.y_of(1)).to_eq(0)
+    t.expect(app.x_of(2)).to_eq(0)
+    t.expect(app.y_of(2)).to_eq(0)
+  end
+  t.it("stack box is the max of its children on BOTH axes") do ||
+    var app = App.build({ |ui: &var Ui, root: &var Col| root.stack() do |c: &var Col|
+          c.text("wide base")
+          c.col() do |c2: &var Col|
+            c.text("a")
+            c.text("b")
+          end
+        end })
+    t.expect(app.w_of(0)).to_eq(w_for.(9))
+    t.expect(app.h_of(0)).to_eq(row_height() * 2)
+  end
+  t.it("a positioned child is offset by its Style.offset(left, top)") do ||
+    var app = App.build({ |ui: &var Ui, root: &var Col| root.stack() do |c: &var Col|
+          c.text("base label")
+          c.col_styled(Style.new.offset(30, 5)) { |b: &var Col| c.text("9") }
+        end })
+    t.expect(app.x_of(2)).to_eq(30)
+    t.expect(app.y_of(2)).to_eq(5)
+    t.expect(app.x_of(3)).to_eq(30)
+    t.expect(app.y_of(3)).to_eq(5)
+  end
+  t.it("stack honors its own padding for the children origin") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.stack_styled(Style.new.pad(4)) do |c: &var Col|
+          c.text("x")
+        end },
+      )
+    t.expect(app.x_of(1)).to_eq(4)
+    t.expect(app.y_of(1)).to_eq(4)
+  end
+  t.it("children paint in BUILD order (first at bottom, last on top)") do ||
+    var app = App.build({ |ui: &var Ui, root: &var Col| root.stack() do |c: &var Col|
+          c.text("under")
+          c.text("over")
+        end })
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    t.expect(surface.size).to_eq(3)
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    t.expect(surface.command_at(1)).to_eq("text('under',4,16)")
+    t.expect(surface.command_at(2)).to_eq("text('over',4,16)")
+  end
+  t.it("hit-test returns the TOPMOST (last-built) overlapping interactive child") do ||
+    var app = App.build(do |ui: &var Ui, root: &var Col|
+          let a = ui.state(0)
+          let b = ui.state(0)
+          root.stack() do |c: &var Col|
+            c.button("under", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+            c.button("over", { |ui2: &var Ui| b.update(ui2, { |v| v + 1 }) })
+          end
+        end)
+    t.expect(app.hit_test(2, 2)).to_eq(2)
+  end
+  t.it("a positioned top child only wins where it actually overlaps") do ||
+    var app = App.build(do |ui: &var Ui, root: &var Col|
+          let a = ui.state(0)
+          let b = ui.state(0)
+          root.stack() do |c: &var Col|
+            c.button("wide under here", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+            c.row_styled(Style.new.offset(80, 0)) { |o: &var Col| c.button("top", { |ui2: &var Ui| b.update(ui2, { |v| v + 1 }) }) }
+          end
+        end)
+    t.expect(app.hit_test(2, 2)).to_eq(1)
+    t.expect(app.hit_test(82, 2)).to_eq(3)
+  end
+end

@@ -101,6 +101,38 @@ Audited 2026-06-08 against `src/**` and CHANGELOG `[Unreleased]`. Ordered so the
 arena/layout foundation lands before the widgets that need it. `→ ruxen #X`
 marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
 
+### Phase 1 — prod-parity foundation (2026-06-11; `docs/LAYOUT.md` F1/F2 ADR)
+
+**F1 — layout completeness** (the deferred half of the own-flex ADR):
+
+- [x] **Flex grow** — per-child main-axis weight distributes the container's
+      leftover main space proportionally (last grown child absorbs rounding).
+      Scoped to styled containers; leaf-grow deferred. Pinned by `tests/flex.rx`.
+- [x] **Main-axis alignment** — `justify`: start / center / end / space_between /
+      space_around. Pinned by `tests/flex.rx`.
+- [x] **Cross-axis alignment** — `align`: start / center / end / stretch. Pinned
+      by `tests/flex.rx`.
+- [x] **Gap** — per-container main-axis spacing between children (replaces
+      hand-inserted spacers). Pinned by `tests/flex.rx`.
+- [x] **Per-side padding** — `Style.pad_l/t/r/b` via `pad_sides`; `pad(n)` is the
+      uniform shorthand (back-compat). Pinned by `tests/flex.rx`.
+- [x] **Stack / positioned** — `kind_stack` (`stack` / `stack_styled`): children
+      occupy the box (size = max both axes), each offset by `Style.offset`;
+      z-order = build order, paint bottom→top, hit-test reverse (topmost wins).
+      Pinned by `tests/stack.rx`.
+
+**F2 — gestures & real scrolling:** (in progress — see below)
+
+- [ ] Pixel-based scrolling
+- [ ] Velocity + fling momentum (injected clock seam)
+- [ ] Tap vs long-press recognizers
+- [ ] Scrollbars (paint-only)
+- [ ] Horizontal scroll
+
+**Deferred (explicit — do NOT implement this phase):** wrap, virtualization,
+keyed diffing / row reuse, scroll animation/fades, double-tap, `shrink` /
+overflow-shrink, leaf-level `grow`, sub-click Float wheel precision.
+
 ### Foundation (unblocks the whole widget library — do first)
 
 - [x] **Nested tree in the arena** — `Col` now owns children via flat parallel

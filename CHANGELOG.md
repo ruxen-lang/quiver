@@ -6,6 +6,40 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **F1 layout completeness — flex grow, alignment, gap, per-side padding,
+  stack** (the deferred half of the own-flex ADR, `docs/LAYOUT.md` F1 addendum).
+  All additive on the existing two-phase `measure`/`place` recursion in
+  `App.arrange`, writing the same `geom_x/y/w/h` the paint + hit-test passes read;
+  every new knob defaults to the v1 behaviour, so existing geometry pins are
+  byte-identical.
+  - **DSL shape: extend `Style`** (not new yield shapes). New chainable setters
+    `gap(n)`, `justify(j)`, `align(a)`, `pad_sides(l,t,r,b)`, `grow(n)`,
+    `offset(l,t)`; `pad(n)` now sets all four per-side fields equal (back-compat).
+    Consumed through `row_styled`/`col_styled`/`stack_styled`. New `Int` constants
+    `just_start/center/end/space_between/space_around`,
+    `align_start/center/end/stretch`. Stored in parallel `Int` hashes on `Col`
+    (the flat-arena discipline; absent ⇒ default).
+  - **Grow** — a child's main-axis weight claims a proportional share of the
+    container's leftover main space (last grown child absorbs integer rounding so
+    the row exactly fills). Scoped to styled containers; leaf-grow deferred (wrap
+    a leaf in a 1-child styled container today).
+  - **Main-axis `justify`** — start / center / end / space_between / space_around,
+    over any leftover main space (inert when grow consumed it).
+  - **Cross-axis `align`** — start / center / end / stretch (stretch resizes the
+    child to the container's inner cross extent).
+  - **Gap** — px between adjacent main-axis children (accounted in the box +
+    content-height); replaces hand-inserted spacers.
+  - **Per-side padding** — `pad_l/t/r/b` insets children + grows the box per side.
+  - **`stack` / positioned** (`kind_stack`, `root.stack` / `stack_styled`) — a
+    container whose children all occupy its box (size = max on both axes), each
+    optionally offset by `Style.offset(left, top)`; z-order = build order.
+    Children PAINT in build order (bottom→top, the existing walk) and HIT-TEST in
+    REVERSE (topmost wins — `hit_stack_children`).
+  - Pins: `tests/flex.rx` (12 — padding/gap/align/justify/grow geometry + a
+    hit-test pin), `tests/stack.rx` (7 — layout/offset/paint-order/reverse
+    hit-test). Suite **157 → 176**; all three examples build.
+
 ### Changed
 - **Owned-`String` label params (drop the last 5 `String.from` sites).** Post-Q38
   a bare/interpolated literal IS an owned `String`, so the label-taking builders

@@ -6,22 +6,28 @@
 ## Tracking scopes ARE node ids in this slice: reactive text node `i` is
 ## tracking scope `i`, so `Ui.dirty` is directly the set of nodes whose
 ## text must be recomputed (and repainted).
-
 ## Layout constants (device-independent pixels; one bitmap-ish font for the
 ## slice — real text metrics arrive with canvas's Skia text stack).
 def row_height -> Int { 24 }
+
 def char_width -> Int { 8 }
+
 def pad_x -> Int { 4 }
+
 def baseline_drop -> Int { 16 }
+
 ## Logical font size (px) quiver renders text at for this slice — one font for
 ## the whole slice. Passed to an injected real-metrics measure fn so its advance
 ## width matches what the shell actually paints (canvas's Skia text at this size).
 def text_size -> Int { 16 }
+
 ## Checkbox box side (a square, smaller than the row so it sits inset).
 def check_box_size -> Int { 16 }
+
 ## Slider thumb side (a square) and track bar height. The track is inset by
 ## `slider_thumb/2` on each end so the thumb center stays inside the box.
 def slider_thumb -> Int { 12 }
+
 def slider_track_h -> Int { 6 }
 
 ## Control key codes for `App.key_down`. canvas's `Event.KeyDown` is CONTROL-ONLY
@@ -29,65 +35,39 @@ def slider_track_h -> Int { 6 }
 ## platform keycodes it delivers, so the windowed shell passes them straight
 ## through (no remapping needed). Printable text never comes through `key_down`.
 def key_backspace -> Int { 8 }
+
 def key_delete -> Int { 127 }
+
 def key_left -> Int { 1073741904 }
+
 def key_right -> Int { 1073741903 }
+
 def key_home -> Int { 1073741898 }
+
 def key_end -> Int { 1073741901 }
 
 class App
   ui: Ui
   root: Col
-  ## node id -> current reactive text (static nodes are read from labels).
   cache: Hash[Int, String]
-  ## Geometry per node id, written by `arrange`.
   geom_x: Hash[Int, Int]
   geom_y: Hash[Int, Int]
   geom_w: Hash[Int, Int]
   geom_h: Hash[Int, Int]
-  ## Widest row ever laid out (monotonic). paint_dirty erases this full
-  ## span so a shrinking label can never leave ghost pixels behind.
   span_w: Int
-  ## Per-list scroll state, node-id-keyed (runtime state, like geometry):
-  ## `scroll` is the current Y offset; `content_h` is the laid-out content
-  ## height (sum of child heights), used to clamp the offset.
   scroll: Hash[Int, Int]
   content_h: Hash[Int, Int]
-  ## The focused input's node id (-1 when nothing is focused). Only the focused
-  ## input consumes key input.
   focused: Int
-  ## Per-input caret index (chars before the caret), node-id-keyed.
   caret: Hash[Int, Int]
-  ## The node currently capturing the pointer (a slider being dragged), or -1.
-  ## `pointer_down` sets it; `pointer_move` drives THAT node regardless of where
-  ## the pointer is; `pointer_up` clears it. Reusable drag infra.
   captured: Int
-  ## Active overlay/popup: the node that owns the open overlay (-1 = none) and
-  ## its anchor in screen space. One overlay at a time this round. When open, it
-  ## paints LAST (on top) and is hit-tested FIRST (a click outside dismisses it,
-  ## consumed). The reusable primitive behind dropdowns/menus/tooltips.
   overlay_owner: Int
   overlay_x: Int
   overlay_y: Int
-  ## Last pointer position (updated by `pointer_move`) — `scroll` routes a wheel
-  ## event to the innermost scrollable list under this point.
   hover_x: Int
   hover_y: Int
-  ## Whether the pointer has been seen yet (so a scroll before any move is a
-  ## no-op rather than routing to (0,0)).
   hovered: Bool
-  ## Current design (logical) size, updated by `resize`. Layout is top-anchored
-  ## for the slice, so width isn't used for wrapping yet, but the size is tracked
-  ## for width-aware layout + correct viewport math as it grows.
   design_w: Int
   design_h: Int
-  ## Injected text-metric seam (docs/decisions/text-metrics-seam.md). A measure
-  ## closure `{ |text, size| Int }` the SHELL BINARY supplies via `set_measure`
-  ## to give real (Skia advance) widths; quiver stays canvas-free, so it never
-  ## imports the metric — it calls through this seam. Stored in a 0-or-1-entry
-  ## POOL + a presence flag, NOT an `Option[any Fn]` field (that stores garbage
-  ## in ruxen v1 — same landmine the compute/handler pools sidestep). Absent ⇒
-  ## char-metric fallback, so headless/tests/examples-without-Skia are identical.
   measure_fns: Array[any Fn[Fn(String, Int) -> Int]]
   has_measure: Bool
 
@@ -137,7 +117,8 @@ class App
   ## types — they are not inferred for this entry block (a ruxen inference gap).
   def self.build(f: any Fn[Fn(&var Ui, &var Col) -> nil]) -> App
     var app = App.new
-    f.(&var app.ui, &var app.root)
+    f.(&var app.ui,
+    &var app.root)
     app.mount
     app.arrange
     app
@@ -170,7 +151,7 @@ class App
       self.ui.current_scope = i
       match self.root.computes.get(ci)
         Some(f) -> self.cache.insert(i, f.(&var self.ui))
-        nil     -> nil
+        nil -> nil
       end
       self.ui.current_scope = -1
     end
@@ -231,7 +212,7 @@ class App
     if hi >= 0
       match self.root.handlers.get(hi)
         Some(f) -> f.(&var self.ui)
-        nil     -> nil
+        nil -> nil
       end
     end
   end
@@ -282,10 +263,27 @@ class App
     end
   end
 
-  ## Intrinsic main-axis-aware width of node `i`. Containers grow by `2*pad`.
-  ##   leaf      -> its pre-measured text width
-  ##   Row       -> sum of children widths  + 2*pad
-  ##   Col       -> max of children widths  + 2*pad
+  ## True when container `i`'s MAIN axis is X (a `row`). Every other container
+  ## (col / stack / list / list_of) stacks on Y, so its main axis is Y.
+  def main_is_x(i: Int) -> Bool { self.root.kind_at(i) == kind_row() }
+
+  ## Number of children of container `i` (for gap accounting).
+  def child_count(i: Int) -> Int
+    var n = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      n = n + 1
+      c = self.root.next_sibling_of(c)
+    end
+    n
+  end
+
+  ## Intrinsic width of node `i` (its content size, before any parent grow).
+  ##   leaf            -> its pre-measured text width
+  ##   Row             -> sum of children widths + gaps + pad_l + pad_r
+  ##   Col/Stack/List  -> max of children widths        + pad_l + pad_r
+  ## (A Row is the only container that SUMS on X; gap adds (n-1)*gap on the
+  ## summing axis only. Stack maxes on both axes — children overlap.)
   def measure_w(i: Int) -> Int
     if !self.root.container_at(i)
       return self.root.iw_of(i)
@@ -301,16 +299,19 @@ class App
       end
       c = self.root.next_sibling_of(c)
     end
-    let inner = self.axis_extent(i, total, maxw, kind_row())
-    inner + self.root.pad_at(i) * 2
+    var inner = maxw
+    if self.main_is_x(i)
+      inner = total + self.gap_total(i)
+    end
+    inner + self.root.pad_l_at(i) + self.root.pad_r_at(i)
   end
 
-  ## Intrinsic height of node `i`. Containers grow by `2*pad`; a List is the
-  ## exception — its box is its FIXED viewport height, not the content extent.
-  ##   leaf -> one row
-  ##   Row  -> max of children heights + 2*pad
-  ##   Col  -> sum of children heights + 2*pad
-  ##   List -> its fixed viewport height
+  ## Intrinsic height of node `i`. A List is the exception — its box is its
+  ## FIXED viewport height, not the content extent.
+  ##   leaf            -> one row
+  ##   Col             -> sum of children heights + gaps + pad_t + pad_b
+  ##   Row/Stack       -> max of children heights        + pad_t + pad_b
+  ##   List/ListOf     -> its fixed viewport height
   def measure_h(i: Int) -> Int
     if self.root.list_at(i)
       return self.root.viewport_at(i)
@@ -329,12 +330,29 @@ class App
       end
       c = self.root.next_sibling_of(c)
     end
-    let inner = self.axis_extent(i, total, maxh, kind_col())
-    inner + self.root.pad_at(i) * 2
+    var inner = maxh
+    if !self.main_is_x(i) && !self.root.stack_at(i)
+      inner = total + self.gap_total(i)
+    end
+    inner + self.root.pad_t_at(i) + self.root.pad_b_at(i)
   end
 
-  ## Sum of a list's children heights — the scrollable content extent, used to
-  ## clamp the offset. (A list does not grow to this; its box is the viewport.)
+  ## Total main-axis gap inside container `i`: (children − 1) * gap, clamped ≥ 0.
+  def gap_total(i: Int) -> Int
+    let g = self.root.gap_at(i)
+    if g <= 0
+      return 0
+    end
+    let n = self.child_count(i)
+    if n <= 1
+      return 0
+    end
+    (n - 1) * g
+  end
+
+  ## Sum of a list's children heights (plus inter-row gap) — the scrollable
+  ## content extent, used to clamp the offset. (A list does not grow to this; its
+  ## box is the viewport.)
   def content_height(i: Int) -> Int
     var total = 0
     var c = self.root.first_child_of(i)
@@ -342,13 +360,20 @@ class App
       total = total + self.measure_h(c)
       c = self.root.next_sibling_of(c)
     end
-    total
+    total + self.gap_total(i)
   end
 
-  ## Place node `i` (and its subtree) with its top-left at (x, y).
+  ## Place node `i` (and its subtree) with its top-left at (x, y), sizing it to
+  ## its INTRINSIC size. The convenience entry; `place_node_sized` is used when a
+  ## parent has resized the child (grow / cross-stretch).
   def var place_node(i: Int, x: Int, y: Int) -> nil
-    let w = self.measure_w(i)
-    let h = self.measure_h(i)
+    self.place_node_sized(i, x, y, self.measure_w(i), self.measure_h(i))
+  end
+
+  ## Place node `i` at (x, y) with an EXPLICIT box size (w, h) — the parent may
+  ## have grown it on the main axis or stretched it on the cross axis. Writes the
+  ## geom, then lays its children inside this box.
+  def var place_node_sized(i: Int, x: Int, y: Int, w: Int, h: Int) -> nil
     self.geom_x.insert(i, x)
     self.geom_y.insert(i, y)
     self.geom_w.insert(i, w)
@@ -357,72 +382,242 @@ class App
       self.span_w = x + w
     end
     if self.root.container_at(i)
-      self.place_children(i, x, y)
+      if self.root.stack_at(i)
+        self.place_stack_children(i, x, y, w, h)
+      else
+        self.place_children(i, x, y, w, h)
+      end
     end
   end
 
-  ## Lay out the children of container `i` along its axis, anchored at (x, y)
-  ## plus the container's padding (children sit inside `geom - padding`).
+  ## Lay out the children of a LINEAR container `i` (row / col / list / list_of)
+  ## inside its box `(x, y, w, h)`. Honors per-side padding, gap, grow (main-axis
+  ## leftover distributed by weight), justify (main-axis distribution of any
+  ## remaining leftover), and align (cross-axis placement, incl. stretch).
   ##
   ## A List lays its children out in CONTENT space (offset-free, natural
-  ## positions); the scroll offset is applied at PAINT time via a translate, so
-  ## `y_of(child)` is the unscrolled position and the on-screen position is
-  ## `y_of(child) - scroll_of(list)`. The list records its content height for
-  ## clamping the offset.
-  def var place_children(i: Int, x: Int, y: Int) -> nil
-    let is_row = self.root.kind_at(i) == kind_row()
-    let p = self.root.pad_at(i)
-    var cx = x + p
-    var cy = y + p
-    if self.root.list_at(i)
+  ## positions); the scroll offset is applied at PAINT time. The list records its
+  ## content height for clamping the offset. Grow/justify are inert for a list on
+  ## its main (Y) axis — its content is its natural extent, not the viewport.
+  def var place_children(i: Int, x: Int, y: Int, w: Int, h: Int) -> nil
+    let is_row = self.main_is_x(i)
+    let pl = self.root.pad_l_at(i)
+    let pt = self.root.pad_t_at(i)
+    let inner_x = x + pl
+    let inner_y = y + pt
+    let inner_w = w - pl - self.root.pad_r_at(i)
+    let inner_h = h - pt - self.root.pad_b_at(i)
+    let gap = self.root.gap_at(i)
+    let is_list = self.root.list_at(i)
+    if is_list
       self.content_h.insert(i, self.content_height(i))
     end
+    let main_extent = self.children_main_extent(i, is_row)
+    let inner_main = self.pick(is_row, inner_w, inner_h)
+    var leftover = 0
+    if !is_list
+      leftover = inner_main - main_extent - self.gap_total(i)
+      if leftover < 0
+        leftover = 0
+      end
+    end
+    let grow_total = self.children_grow_total(i)
+    var lead = 0
+    var extra_gap = 0
+    if grow_total <= 0
+      lead = self.justify_lead(i, leftover)
+      extra_gap = self.justify_extra_gap(i, leftover)
+    end
+    var cursor = self.pick(is_row, inner_x, inner_y) + lead
+    var grown_remaining = grow_total
+    var grow_left = leftover
     var c = self.root.first_child_of(i)
     while c >= 0
-      self.place_node(c, cx, cy)
-      if is_row
-        cx = cx + self.measure_w(c)
-      else
-        cy = cy + self.measure_h(c)
+      let cm = self.child_main(c, is_row)
+      var main_size = cm
+      let g = self.root.grow_at(c)
+      if grow_total > 0 && g > 0
+        let share = grow_left * g / grown_remaining
+        main_size = cm + share
+        grow_left = grow_left - share
+        grown_remaining = grown_remaining - g
       end
+      self.place_linear_child(i, c, is_row, cursor, inner_x, inner_y, inner_w, inner_h, main_size)
+      cursor = cursor + main_size + gap + extra_gap
       c = self.root.next_sibling_of(c)
     end
   end
 
-  ## Pick the main-axis extent for container `i`: `total` when `i`'s kind is
-  ## `sum_kind` (children stack along that axis), else `maxv` (cross axis).
-  def axis_extent(i: Int, total: Int, maxv: Int, sum_kind: Int) -> Int
-    if self.root.kind_at(i) == sum_kind
-      return total
+  ## Place one linear child `c` of container `i`: main-axis position = `cursor`,
+  ## main-axis size = `main_size` (intrinsic or grown), cross-axis position +
+  ## size from `align`. `(inner_x, inner_y, inner_w, inner_h)` is the padded box.
+  def var place_linear_child(
+    i: Int,
+    c: Int,
+    is_row: Bool,
+    cursor: Int,
+    inner_x: Int,
+    inner_y: Int,
+    inner_w: Int,
+    inner_h: Int,
+    main_size: Int,
+  ) -> nil
+    let cross_extent = self.pick(is_row, inner_h, inner_w)
+    let child_cross = self.child_cross(c, is_row)
+    let cross_off = self.align_cross_offset(i, child_cross, cross_extent)
+    var cross_size = child_cross
+    if self.root.align_at(i) == align_stretch()
+      cross_size = cross_extent
     end
-    maxv
+    if is_row
+      let cy = inner_y + cross_off
+      self.place_node_sized(c, cursor, cy, main_size, cross_size)
+    else
+      let cx = inner_x + cross_off
+      self.place_node_sized(c, cx, cursor, cross_size, main_size)
+    end
+  end
+
+  ## Lay out the children of a `stack` container `i`: every child occupies the
+  ## stack box at the padded origin plus its own `offset(left, top)`, at the
+  ## child's intrinsic size. Build order = z-order (paint bottom→top; hit-test
+  ## reverses).
+  def var place_stack_children(i: Int, x: Int, y: Int, w: Int, h: Int) -> nil
+    let ox = x + self.root.pad_l_at(i)
+    let oy = y + self.root.pad_t_at(i)
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      self.place_node(c, ox + self.root.offset_l_at(c), oy + self.root.offset_t_at(c))
+      c = self.root.next_sibling_of(c)
+    end
+  end
+
+  ## Sum of container `i`'s children's main-axis intrinsic sizes.
+  def children_main_extent(i: Int, is_row: Bool) -> Int
+    var total = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      total = total + self.child_main(c, is_row)
+      c = self.root.next_sibling_of(c)
+    end
+    total
+  end
+
+  ## Sum of container `i`'s children's grow weights.
+  def children_grow_total(i: Int) -> Int
+    var total = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      total = total + self.root.grow_at(c)
+      c = self.root.next_sibling_of(c)
+    end
+    total
+  end
+
+  ## Intrinsic main-axis size of node `c` given the parent's axis.
+  def child_main(c: Int, is_row: Bool) -> Int
+    if is_row
+      return self.measure_w(c)
+    end
+    self.measure_h(c)
+  end
+
+  ## Intrinsic cross-axis size of node `c` given the parent's axis.
+  def child_cross(c: Int, is_row: Bool) -> Int
+    if is_row
+      return self.measure_h(c)
+    end
+    self.measure_w(c)
+  end
+
+  ## Pick `a` when `cond`, else `b` (axis selector helper).
+  def pick(cond: Bool, a: Int, b: Int) -> Int
+    if cond
+      return a
+    end
+    b
+  end
+
+  ## Leading main-axis offset for container `i`'s `justify` over `leftover`.
+  def justify_lead(i: Int, leftover: Int) -> Int
+    if leftover <= 0
+      return 0
+    end
+    let j = self.root.justify_at(i)
+    if j == just_center()
+      return leftover / 2
+    end
+    if j == just_end()
+      return leftover
+    end
+    if j == just_space_around()
+      let n = self.child_count(i)
+      if n > 0
+        return leftover / n / 2
+      end
+    end
+    0
+  end
+
+  ## Extra inter-child gap for container `i`'s `justify` over `leftover`
+  ## (space_between / space_around spread the remaining space between children).
+  def justify_extra_gap(i: Int, leftover: Int) -> Int
+    if leftover <= 0
+      return 0
+    end
+    let j = self.root.justify_at(i)
+    let n = self.child_count(i)
+    if j == just_space_between() && n > 1
+      return leftover / (n - 1)
+    end
+    if j == just_space_around() && n > 0
+      return leftover / n
+    end
+    0
+  end
+
+  ## Cross-axis offset for a child of size `child_cross` within `cross_extent`
+  ## per container `i`'s `align` (stretch is handled by resizing, not offset).
+  def align_cross_offset(i: Int, child_cross: Int, cross_extent: Int) -> Int
+    let a = self.root.align_at(i)
+    let slack = cross_extent - child_cross
+    if slack <= 0
+      return 0
+    end
+    if a == align_center()
+      return slack / 2
+    end
+    if a == align_end()
+      return slack
+    end
+    0
   end
 
   def x_of(i: Int) -> Int
     match self.geom_x.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
   def y_of(i: Int) -> Int
     match self.geom_y.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
   def w_of(i: Int) -> Int
     match self.geom_w.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
   def h_of(i: Int) -> Int
     match self.geom_h.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
@@ -444,7 +639,7 @@ class App
   def scroll_of(i: Int) -> Int
     match self.scroll.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
@@ -452,7 +647,7 @@ class App
   def content_height_of(i: Int) -> Int
     match self.content_h.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
@@ -465,9 +660,7 @@ class App
 
   ## Scroll list `i` by a delta (positive scrolls content up / further down the
   ## list), clamped and re-laid-out.
-  def var scroll_by(i: Int, dy: Int) -> nil
-    self.scroll_to(i, self.scroll_of(i) + dy)
-  end
+  def var scroll_by(i: Int, dy: Int) -> nil { self.scroll_to(i, self.scroll_of(i) + dy) }
 
   ## Topmost interactive node (a button handler OR a focusable input) under the
   ## SCREEN point (x, y), or -1. Mirrors the paint walk's transforms: descending
@@ -493,7 +686,8 @@ class App
   def hit_tree(i: Int, x: Int, y: Int, ox: Int, oy: Int) -> Int
     let px = x + ox
     let py = y + oy
-    if self.root.handler_at(i) >= 0 || self.root.input_at(i) || self.root.slider_at(i) || self.root.select_at(i)
+    if self.root.handler_at(i) >= 0 || self.root.input_at(i) || self.root.slider_at(i) ||
+    self.root.select_at(i)
       if self.contains(i, px, py)
         return i
       end
@@ -503,12 +697,13 @@ class App
     end
     var coy = oy
     if self.root.list_at(i)
-      # clip: the point (in this list's parent space) must be inside its box,
-      # else none of its children are reachable.
       if !self.contains(i, px, py)
         return -1
       end
       coy = oy + self.scroll_of(i)
+    end
+    if self.root.stack_at(i)
+      return self.hit_stack_children(i, x, y, ox, coy)
     end
     var c = self.root.first_child_of(i)
     while c >= 0
@@ -517,6 +712,32 @@ class App
         return h
       end
       c = self.root.next_sibling_of(c)
+    end
+    -1
+  end
+
+  ## Hit-test a stack's children in REVERSE build order (topmost wins): collect
+  ## the forward child chain, then test last→first, returning the first hit.
+  def hit_stack_children(i: Int, x: Int, y: Int, ox: Int, oy: Int) -> Int
+    var kids: Array[Int] = Array.new
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      kids.push(c)
+      c = self.root.next_sibling_of(c)
+    end
+    var k = kids.size as Int - 1
+    while k >= 0
+      let child = match kids.get(k)
+          Some(v) -> *v
+          nil -> -1
+        end
+      if child >= 0
+        let h = self.hit_tree(child, x, y, ox, oy)
+        if h >= 0
+          return h
+        end
+      end
+      k = k - 1
     end
     -1
   end
@@ -554,7 +775,6 @@ class App
       if !self.contains(i, px, py)
         return best
       end
-      # this list contains the point; it's deeper than any ancestor list found.
       deepest = i
       coy = oy + self.scroll_of(i)
     end
@@ -600,14 +820,10 @@ class App
   end
 
   ## Close any open overlay.
-  def var close_overlay -> nil
-    self.overlay_owner = -1
-  end
+  def var close_overlay -> nil { self.overlay_owner = -1 }
 
   ## Whether an overlay is currently open.
-  def overlay_open? -> Bool
-    self.overlay_owner >= 0
-  end
+  def overlay_open? -> Bool { self.overlay_owner >= 0 }
 
   ## A pointer-move event: record the hover position (so a later `scroll` routes
   ## to the list under the pointer), then — if a node is captured (a slider drag
@@ -627,25 +843,17 @@ class App
   end
 
   ## A pointer-up event: release any capture.
-  def var pointer_up(x: Int, y: Int) -> nil
-    self.captured = -1
-  end
+  def var pointer_up(x: Int, y: Int) -> nil { self.captured = -1 }
 
   ## The node currently capturing the pointer, or -1.
-  def captured_node -> Int
-    self.captured
-  end
+  def captured_node -> Int { self.captured }
 
   ## Programmatic drag: set slider `i`'s value from a pointer x (the headless
   ## equivalent of a `pointer_move` while captured).
-  def var drag_to(i: Int, x: Int) -> nil
-    self.set_slider_from_x(i, x)
-  end
+  def var drag_to(i: Int, x: Int) -> nil { self.set_slider_from_x(i, x) }
 
   ## Programmatic set: write slider `i`'s value directly, clamped to [min, max].
-  def var set_value(i: Int, v: Int) -> nil
-    self.write_slider(i, self.clamp_slider(i, v))
-  end
+  def var set_value(i: Int, v: Int) -> nil { self.write_slider(i, self.clamp_slider(i, v)) }
 
   ## Current value of slider `i` — a lone `peek` (no `set` in this frame), 0 when
   ## `i` is not a slider.
@@ -656,7 +864,7 @@ class App
     end
     match self.root.ints.get(idx)
       Some(s) -> s.peek
-      nil     -> 0
+      nil -> 0
     end
   end
 
@@ -668,32 +876,26 @@ class App
     end
     match self.root.ints.get(idx)
       Some(s) -> s.peek
-      nil     -> 0
+      nil -> 0
     end
   end
 
   ## Current option string shown by select `i` (its selected option).
-  def select_text(i: Int) -> String
-    self.root.option_at(i, self.select_value(i))
-  end
+  def select_text(i: Int) -> String { self.root.option_at(i, self.select_value(i)) }
 
   ## The `ListModel` bound to reactive-list `i` — drive it with
   ## `add`/`remove`/`toggle` to mutate the list; the bound list rebuilds on the
   ## next flush.
-  def list_model_of(i: Int) -> ListModel
-    self.root.model_at(i)
-  end
+  def list_model_of(i: Int) -> ListModel { self.root.model_at(i) }
 
   ## The focused input's node id, or -1 when nothing is focused.
-  def focused_node -> Int
-    self.focused
-  end
+  def focused_node -> Int { self.focused }
 
   ## Caret index (chars before the caret) of input `i`, or 0.
   def caret_of(i: Int) -> Int
     match self.caret.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
@@ -707,7 +909,7 @@ class App
     end
     match self.root.bools.get(idx)
       Some(s) -> s.peek
-      nil     -> false
+      nil -> false
     end
   end
 
@@ -753,13 +955,6 @@ class App
     self.insert_char(i, cp)
   end
 
-  ## `type_char` is a true `alias` of `text_input` — the headless typing entry
-  ## point, one body, zero extra codegen (was a hand-written delegating method).
-  alias type_char text_input
-
-  ## `key` is a true `alias` of `key_down` — the headless control-key entry.
-  alias key key_down
-
   ## A mouse-wheel event: scroll the innermost scrollable `list` under the last
   ## hovered point by the wheel delta. `+dy` is wheel up/away → scroll content
   ## UP (toward the top) → DECREASE the offset; `-dy` (wheel down) increases it.
@@ -804,18 +999,12 @@ class App
 
   ## Whether a real-metric measure fn has been injected (else char-metric
   ## fallback). Exposed so a test/double can assert the seam is (un)set.
-  def measuring? -> Bool
-    self.has_measure
-  end
+  def measuring? -> Bool { self.has_measure }
 
   ## Current design (logical) width / height, as last set by `resize`.
-  def design_width -> Int
-    self.design_w
-  end
+  def design_width -> Int { self.design_w }
 
-  def design_height -> Int
-    self.design_h
-  end
+  def design_height -> Int { self.design_h }
 
   private
 
@@ -844,10 +1033,10 @@ class App
     if self.has_measure
       match self.measure_fns.get(0)
         Some(f) -> return f.(s.clone, text_size())
-        nil     -> nil
+        nil -> nil
       end
     end
-    (s.size as Int) * char_width()
+    s.size as Int * char_width()
   end
 
   ## Text width of a leaf node: measured text + horizontal padding. Uses the
@@ -869,9 +1058,7 @@ class App
   ## Set slider `i`'s value from a pointer x: map x -> value, then write once.
   ## The map reads NO state (pure geometry math), so the write is a single lock
   ## (set only) — no peek+set pair (the one-lock-per-frame landmine).
-  def var set_slider_from_x(i: Int, x: Int) -> nil
-    self.write_slider(i, self.value_from_x(i, x))
-  end
+  def var set_slider_from_x(i: Int, x: Int) -> nil { self.write_slider(i, self.value_from_x(i, x)) }
 
   ## Map a pointer x to a clamped value for slider `i`:
   ##   v = min + round((x - track_left) / track_w * (max - min)), clamped.
@@ -895,7 +1082,6 @@ class App
     if rel >= track_w
       return max
     end
-    # round(rel * span / track_w)
     min + (rel * span + track_w / 2) / track_w
   end
 
@@ -921,7 +1107,7 @@ class App
     end
     match self.root.ints.get(idx)
       Some(s) -> s.set(&var self.ui, v)
-      nil     -> nil
+      nil -> nil
     end
   end
 
@@ -968,7 +1154,7 @@ class App
     end
     match self.root.ints.get(idx)
       Some(s) -> s.set(&var self.ui, v)
-      nil     -> nil
+      nil -> nil
     end
   end
 
@@ -987,7 +1173,7 @@ class App
     end
     match self.root.values.get(idx)
       Some(s) -> s.peek
-      nil     -> ""
+      nil -> ""
     end
   end
 
@@ -1002,30 +1188,30 @@ class App
     end
     match self.root.values.get(idx)
       Some(s) -> s.update(&var self.ui, f)
-      nil     -> nil
+      nil -> nil
     end
   end
 
   ## Insert the printable char `code` at input `i`'s caret, advancing it.
   def var insert_char(i: Int, code: Int) -> nil
     let caret = self.caret_of(i)
-    self.edit_value(i, { |cur: String|
-      var out = ""
-      var n = 0
-      for c in cur.chars
-        if n == caret
+    self.edit_value(i, do |cur: String|
+        var out = ""
+        var n = 0
+        for c in cur.chars
+          if n == caret
+            let ch = code as Char
+            out = "#{out}#{ch}"
+          end
+          out = "#{out}#{c}"
+          n = n + 1
+        end
+        if caret >= n
           let ch = code as Char
           out = "#{out}#{ch}"
         end
-        out = "#{out}#{c}"
-        n = n + 1
-      end
-      if caret >= n
-        let ch = code as Char
-        out = "#{out}#{ch}"
-      end
-      out
-    })
+        out
+      end)
     self.caret.insert(i, caret + 1)
   end
 
@@ -1035,17 +1221,17 @@ class App
     if caret <= 0
       return
     end
-    self.edit_value(i, { |cur: String|
-      var out = ""
-      var n = 0
-      for c in cur.chars
-        if n != caret - 1
-          out = "#{out}#{c}"
+    self.edit_value(i, do |cur: String|
+        var out = ""
+        var n = 0
+        for c in cur.chars
+          if n != caret - 1
+            out = "#{out}#{c}"
+          end
+          n = n + 1
         end
-        n = n + 1
-      end
-      out
-    })
+        out
+      end)
     self.caret.insert(i, caret - 1)
   end
 
@@ -1071,17 +1257,17 @@ class App
     if caret >= len
       return
     end
-    self.edit_value(i, { |cur: String|
-      var out = ""
-      var n = 0
-      for c in cur.chars
-        if n != caret
-          out = "#{out}#{c}"
+    self.edit_value(i, do |cur: String|
+        var out = ""
+        var n = 0
+        for c in cur.chars
+          if n != caret
+            out = "#{out}#{c}"
+          end
+          n = n + 1
         end
-        n = n + 1
-      end
-      out
-    })
+        out
+      end)
     self.ui.mark_dirty(i)
   end
 
@@ -1096,4 +1282,9 @@ class App
     self.caret.insert(i, self.input_value(i).size as Int)
     self.ui.mark_dirty(i)
   end
+
+  public
+
+  alias type_char text_input
+  alias key key_down
 end

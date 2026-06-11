@@ -224,8 +224,82 @@ Each setter returns the `Style` for chaining; unset fields draw nothing
 
 Style lives in parallel `Int` hashes on `Col` (the same flat-arena discipline
 as the tree links; absent ⇒ unstyled), not a recursive/`Option`-typed field.
-Pinned by `tests/style.rx`. Per-side padding, margins, and gradient/shadow
-fills are deferred — additive on the same `Style`, no API break.
+Pinned by `tests/style.rx`. Margins and gradient/shadow fills are deferred —
+additive on the same `Style`, no API break.
+
+### F1 layout: gap, alignment, grow, per-side padding (`docs/LAYOUT.md`)
+
+`Style` carries the container-layout knobs too — set them with the same chainable
+builders and hand the `Style` to `row_styled` / `col_styled` (every knob defaults
+to the v1 behaviour, so an unstyled container is unchanged):
+
+| Setter | Meaning | Default |
+|---|---|---|
+| `gap(n)` | px between adjacent children on the main axis (not at the ends) | 0 |
+| `pad_sides(l,t,r,b)` | per-side padding (overrides `pad`) | uniform `pad` |
+| `justify(j)` | main-axis distribution of leftover space | `just_start` |
+| `align(a)` | cross-axis alignment of each child | `align_start` |
+| `grow(n)` | this container's main-axis grow weight in ITS parent | 0 |
+| `offset(l,t)` | this child's offset within a `stack` parent | 0, 0 |
+
+`pad(n)` is the uniform shorthand — it sets all four per-side fields to `n` (so
+existing `pad(8)` is `pad_sides(8,8,8,8)`); `pad_sides` overrides per side.
+
+```ruxen
+root.row_styled(Style.new.gap(12).justify(just_space_between()).align(align_center())) do |c: &var Col|
+  c.text("left")
+  c.text("right")
+end
+```
+
+- **`justify`** constants: `just_start` (default), `just_center`, `just_end`,
+  `just_space_between`, `just_space_around` — they distribute any *leftover*
+  main-axis space (container inner main extent − children − gaps). Leftover only
+  exists when a parent has stretched/grown the container past its content (a row
+  is otherwise exactly its content wide), so `justify` is most useful inside an
+  `align(align_stretch())` parent or a grown container.
+- **`align`** constants: `align_start` (default), `align_center`, `align_end`,
+  `align_stretch`. `align_stretch` resizes each child to the container's inner
+  cross extent (the one case that grows a child beyond intrinsic).
+- **`grow(n)`** — a child container's weight; the parent splits its leftover
+  main-axis space among grown children proportionally (the last grown child
+  absorbs integer-division rounding so the line exactly fills). `grow` is read by
+  the PARENT place pass. Scope: styled containers. To grow a bare leaf, wrap it
+  in a 1-child styled container (`c.row_styled(Style.new.grow(1)) do |g| g.text(…) end`)
+  — leaf-level grow is deferred (a `text` takes no `Style`).
+
+Pinned by `tests/flex.rx` (geometry asserted to the pixel + a hit-test pin).
+`shrink` (overflow) is deferred — v1 does not shrink below intrinsic.
+
+### `stack` / positioned overlap (`docs/LAYOUT.md`)
+
+A `stack` is a container whose children **all occupy its box** (size = the max of
+its children on both axes), each optionally offset by its own
+`Style.offset(left, top)`. Z-order is build order — the first child is at the
+bottom, the last on top. The primitive for badges, overlays-in-tree, layered
+art.
+
+```ruxen
+root.stack do |c: &var Col|
+  c.text("base")                                          # bottom
+  c.col_styled(Style.new.offset(40, 0)) do |b: &var Col|   # a badge, offset right
+    b.text("9")
+  end                                                     # on top
+end
+```
+
+- **Layout.** Each child sits at the stack's padded origin + its `offset`, at its
+  intrinsic size. The stack box is the max child extent on each axis.
+- **Paint.** Children paint in build order (bottom → top) — the existing
+  `paint_tree` child walk, no clip/translate.
+- **Hit-test.** Children hit-test in **reverse** build order, so the topmost
+  (last-built) overlapping interactive child wins — the one place `hit_test`
+  special-cases a container kind (`hit_stack_children`).
+
+`stack` (and `stack_styled`) is a `&block` + `yield` builder like `row`/`col` —
+the param must be typed (`do |c: &var Col| … end`). Pinned by `tests/stack.rx`
+(layout, offset, paint order, reverse hit-test). Deferred: z-index reordering
+distinct from build order, clip-to-stack.
 
 ### Vertically-scrolling `List`
 
