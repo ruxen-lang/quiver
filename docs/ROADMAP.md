@@ -134,8 +134,14 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       long-press via `c.long_press({ |ui| … })` (attaches to last-built node),
       fired by `tick` past `long_press_ms` within `gesture_slop`. Pinned by
       `tests/scroll_gestures.rx`.
-- [ ] Scrollbars (paint-only)
-- [ ] Horizontal scroll
+- [x] **Scrollbars (paint-only)** — a thumb on the trailing edge when content
+      overflows (right for a vlist, bottom for an hlist), sized/positioned from
+      the viewport/content/scroll ratios, painted in viewport space after the
+      clip restore. Pinned by `tests/scrollbar.rx`.
+- [x] **Horizontal scroll** — `hlist(viewport_w)` reuses `kind_list` + a
+      `horizontal` flag; all clip/scroll/hit/scrollbar/fling machinery is shared
+      on an axis-tagged offset; the vertical path is byte-identical. Pinned by
+      `tests/hlist.rx`.
 
 **Deferred (explicit — do NOT implement this phase):** wrap, virtualization,
 keyed diffing / row reuse, scroll animation/fades, double-tap, `shrink` /

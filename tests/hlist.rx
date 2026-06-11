@@ -1,0 +1,86 @@
+# Pins F2 horizontal scrolling (docs/LAYOUT.md F2): `hlist(viewport_w)` reuses
+# the list machinery on the X axis — children stack + clip + scroll on X, the
+# viewport is a fixed width, paint translates on X, hit-test accumulates the X
+# offset, and the scrollbar is a horizontal bar at the bottom. These mirror the
+# vertical pins. char_width()=8, pad_x()=4, row_height()=24.
+Tester.describe("F2 — horizontal scroll (hlist)") do |t: &var Tester|
+  let w_for = { |chars: Int| chars * char_width() + pad_x() * 2 }
+  let h_app = { || App.build({ |ui: &var Ui, root: &var Col| root.hlist(40) do |c: &var Col|
+        c.text("ab")
+        c.text("cd")
+        c.text("ef")
+      end }) }
+  t.it("hlist box is the fixed viewport WIDTH; children stack on X") do ||
+    var app = h_app.()
+    t.expect(app.w_of(0)).to_eq(40)
+    t.expect(app.h_of(0)).to_eq(row_height())
+    t.expect(app.x_of(1)).to_eq(0)
+    t.expect(app.x_of(2)).to_eq(w_for.(2))
+    t.expect(app.x_of(3)).to_eq(w_for.(2) * 2)
+    t.expect(app.y_of(1)).to_eq(0)
+    t.expect(app.y_of(3)).to_eq(0)
+  end
+  t.it("content extent is the sum of child widths; scroll clamps on X") do ||
+    var app = h_app.()
+    t.expect(app.content_height_of(0)).to_eq(w_for.(2) * 3)
+    let max_off = w_for.(2) * 3 - 40
+    app.scroll_to(0, 999)
+    t.expect(app.scroll_of(0)).to_eq(max_off)
+    app.scroll_to(0, 0 - 5)
+    t.expect(app.scroll_of(0)).to_eq(0)
+  end
+  t.it("wheel over an hlist scrolls it on X (dx, falling back to dy)") do ||
+    var app = h_app.()
+    app.set_scroll_line(8)
+    app.pointer_move(2, 2)
+    app.scroll(0 - 1, 0)
+    t.expect(app.scroll_of(0)).to_eq(8)
+    app.scroll(0, 0 - 1)
+    t.expect(app.scroll_of(0)).to_eq(16)
+  end
+  t.it("paint clips the viewport and translates by -offset on the X axis") do ||
+    var app = h_app.()
+    app.scroll_to(0, w_for.(2))
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    t.expect(surface.command_at(1)).to_eq("save")
+    t.expect(surface.command_at(2)).to_eq("clip(0,0,40,#{row_height()})")
+    t.expect(surface.command_at(3)).to_eq("translate(#{0 - w_for.(2)},0)")
+  end
+  t.it("hit-test accounts for the X scroll offset (clicks land on screen cell)") do ||
+    var app = App.build(do |ui: &var Ui, root: &var Col|
+          let a = ui.state(0)
+          root.hlist(40) do |c: &var Col|
+            c.button("b0", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+            c.button("b1", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+            c.button("b2", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+          end
+        end)
+    t.expect(app.hit_test(2, 2)).to_eq(1)
+    app.scroll_to(0, w_for.(2))
+    t.expect(app.hit_test(2, 2)).to_eq(2)
+    t.expect(app.hit_test(60, 2)).to_eq(-1)
+  end
+  t.it("the scrollbar is a horizontal bar along the bottom edge") do ||
+    var app = h_app.()
+    t.expect(app.scrollbar_visible?(0)).to_eq(true)
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    let last = surface.size - 1
+    t.expect(surface.op_at(last)).to_eq(op_round_rect())
+    t.expect(surface.y_at(last)).to_eq(app.y_of(0) + app.h_of(0) - scrollbar_w())
+    t.expect(surface.h_at(last)).to_eq(scrollbar_w())
+    t.expect(surface.w_at(last)).to_eq(app.scrollbar_thumb_h(0))
+    t.expect(surface.x_at(last)).to_eq(app.x_of(0))
+  end
+  t.it("dragging an hlist scrolls it on X") do ||
+    var app = h_app.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(2, 2)
+    ms.set(&var clk, 10)
+    app.pointer_move(2 - 15, 2)
+    t.expect(app.scroll_of(0)).to_eq(15)
+  end
+end

@@ -64,6 +64,11 @@ def long_press_ms -> Int { 500 }
 ## press point cancels the long-press (it becomes a drag).
 def gesture_slop -> Int { 6 }
 
+## Scrollbar thumb width (px) and minimum thumb length (px) — paint-only (F2).
+def scrollbar_w -> Int { 4 }
+
+def scrollbar_min_thumb -> Int { 12 }
+
 class App
   ui: Ui
   root: Col
@@ -307,9 +312,15 @@ class App
     end
   end
 
-  ## True when container `i`'s MAIN axis is X (a `row`). Every other container
-  ## (col / stack / list / list_of) stacks on Y, so its main axis is Y.
-  def main_is_x(i: Int) -> Bool { self.root.kind_at(i) == kind_row() }
+  ## True when container `i`'s MAIN axis is X — a `row`, or a HORIZONTAL list
+  ## (`hlist`). Every other container (col / stack / vertical list / list_of)
+  ## stacks on Y.
+  def main_is_x(i: Int) -> Bool
+    self.root.kind_at(i) == kind_row() || self.root.list_at(i) && self.root.horizontal_at(i)
+  end
+
+  ## True when list `i` scrolls horizontally (an `hlist`).
+  def hlist_at(i: Int) -> Bool { self.root.list_at(i) && self.root.horizontal_at(i) }
 
   ## Number of children of container `i` (for gap accounting).
   def child_count(i: Int) -> Int
@@ -331,6 +342,9 @@ class App
   def measure_w(i: Int) -> Int
     if !self.root.container_at(i)
       return self.root.iw_of(i)
+    end
+    if self.hlist_at(i)
+      return self.root.viewport_at(i)
     end
     var total = 0
     var maxw = 0
@@ -357,7 +371,7 @@ class App
   ##   Row/Stack       -> max of children heights        + pad_t + pad_b
   ##   List/ListOf     -> its fixed viewport height
   def measure_h(i: Int) -> Int
-    if self.root.list_at(i)
+    if self.root.list_at(i) && !self.root.horizontal_at(i)
       return self.root.viewport_at(i)
     end
     if !self.root.container_at(i)
@@ -394,14 +408,20 @@ class App
     (n - 1) * g
   end
 
-  ## Sum of a list's children heights (plus inter-row gap) — the scrollable
-  ## content extent, used to clamp the offset. (A list does not grow to this; its
-  ## box is the viewport.)
+  ## Sum of a list's children along its SCROLL axis (plus inter-child gap) — the
+  ## scrollable content extent, used to clamp the offset and size the scrollbar.
+  ## Heights for a vertical list, widths for a horizontal (`hlist`) one. (A list
+  ## does not grow to this; its box is the viewport.)
   def content_height(i: Int) -> Int
+    let is_h = self.root.horizontal_at(i)
     var total = 0
     var c = self.root.first_child_of(i)
     while c >= 0
-      total = total + self.measure_h(c)
+      if is_h
+        total = total + self.measure_w(c)
+      else
+        total = total + self.measure_h(c)
+      end
       c = self.root.next_sibling_of(c)
     end
     total + self.gap_total(i)
@@ -695,6 +715,58 @@ class App
     end
   end
 
+  ## --- Scrollbar geometry (paint-only; docs/LAYOUT.md F2) ---
+  ## Whether list `i`'s content overflows its viewport (so a scrollbar shows).
+  def scrollbar_visible?(i: Int) -> Bool { self.content_height_of(i) > self.root.viewport_at(i) }
+
+  ## Scrollbar thumb LENGTH (px) along list `i`'s scroll axis:
+  ## `viewport * viewport / content`, clamped to a minimum so a long list still
+  ## has a grabbable thumb. 0 when not overflowing. (`viewport_at` is the
+  ## scroll-axis extent — height for a vlist, width for an hlist — so this is
+  ## axis-agnostic.) `scrollbar_thumb_h` is the vertical name kept for back-compat.
+  def scrollbar_thumb_h(i: Int) -> Int
+    if !self.scrollbar_visible?(i)
+      return 0
+    end
+    let vp = self.root.viewport_at(i)
+    let content = self.content_height_of(i)
+    var th = vp * vp / content
+    if th < scrollbar_min_thumb()
+      th = scrollbar_min_thumb()
+    end
+    if th > vp
+      th = vp
+    end
+    th
+  end
+
+  ## Scrollbar thumb POSITION (screen px) along list `i`'s scroll axis: the
+  ## viewport's start edge + `(viewport - thumb_len) * scroll / max_scroll`. The
+  ## start edge is `x_of` for an hlist, `y_of` for a vlist. `scrollbar_thumb_y` is
+  ## the vertical name kept for back-compat.
+  def scrollbar_thumb_y(i: Int) -> Int
+    let start = self.scrollbar_axis_start(i)
+    if !self.scrollbar_visible?(i)
+      return start
+    end
+    let vp = self.root.viewport_at(i)
+    let th = self.scrollbar_thumb_h(i)
+    let max_scroll = self.content_height_of(i) - vp
+    if max_scroll <= 0
+      return start
+    end
+    let travel = vp - th
+    start + travel * self.scroll_of(i) / max_scroll
+  end
+
+  ## The viewport's start edge along the scroll axis (x_of for hlist, y_of else).
+  def scrollbar_axis_start(i: Int) -> Int
+    if self.root.horizontal_at(i)
+      return self.x_of(i)
+    end
+    self.y_of(i)
+  end
+
   ## Scroll list `i` to an absolute offset, clamped to [0, content - viewport],
   ## then re-lay-out so the children's geometry reflects the new offset.
   def var scroll_to(i: Int, offset: Int) -> nil
@@ -746,19 +818,24 @@ class App
     if !self.root.container_at(i)
       return -1
     end
+    var cox = ox
     var coy = oy
     if self.root.list_at(i)
       if !self.contains(i, px, py)
         return -1
       end
-      coy = oy + self.scroll_of(i)
+      if self.root.horizontal_at(i)
+        cox = ox + self.scroll_of(i)
+      else
+        coy = oy + self.scroll_of(i)
+      end
     end
     if self.root.stack_at(i)
-      return self.hit_stack_children(i, x, y, ox, coy)
+      return self.hit_stack_children(i, x, y, cox, coy)
     end
     var c = self.root.first_child_of(i)
     while c >= 0
-      let h = self.hit_tree(c, x, y, ox, coy)
+      let h = self.hit_tree(c, x, y, cox, coy)
       if h >= 0
         return h
       end
@@ -820,6 +897,7 @@ class App
     if !self.root.container_at(i)
       return best
     end
+    var cox = ox
     var coy = oy
     var deepest = best
     if self.root.list_at(i)
@@ -827,11 +905,15 @@ class App
         return best
       end
       deepest = i
-      coy = oy + self.scroll_of(i)
+      if self.root.horizontal_at(i)
+        cox = ox + self.scroll_of(i)
+      else
+        coy = oy + self.scroll_of(i)
+      end
     end
     var c = self.root.first_child_of(i)
     while c >= 0
-      deepest = self.list_under_tree(c, x, y, ox, coy, deepest)
+      deepest = self.list_under_tree(c, x, y, cox, coy, deepest)
       c = self.root.next_sibling_of(c)
     end
     deepest
@@ -889,9 +971,18 @@ class App
     end
     self.scroll_captured = list
     self.fling_v.insert(list, 0)
-    self.drag_last_pos = y
+    self.drag_last_pos = self.drag_axis_pos(list, x, y)
     self.drag_last_time = self.now
     self.drag_v = 0
+  end
+
+  ## The pointer coordinate along list `i`'s scroll axis: x for a horizontal
+  ## list, y for a vertical one.
+  def drag_axis_pos(i: Int, x: Int, y: Int) -> Int
+    if self.root.horizontal_at(i)
+      return x
+    end
+    y
   end
 
   ## Open the overlay owned by node `owner`, anchored at screen (x, y).
@@ -929,19 +1020,21 @@ class App
     self.captured
   end
 
-  ## Drive the captured list's drag-scroll from pointer y: scroll by the delta
-  ## since the last sample (a drag DOWN reveals content ABOVE → offset decreases),
-  ## and update the running velocity (px per clock unit) over this sample.
+  ## Drive the captured list's drag-scroll from the pointer's SCROLL-axis
+  ## position: scroll by the delta since the last sample (a drag toward the
+  ## content's start reveals earlier content → offset decreases), and update the
+  ## running velocity (px per clock unit). Axis = X for an hlist, Y for a vlist.
   def var drag_scroll(x: Int, y: Int) -> nil
     let list = self.scroll_captured
-    let dy = y - self.drag_last_pos
-    self.scroll_by(list, 0 - dy)
+    let pos = self.drag_axis_pos(list, x, y)
+    let d = pos - self.drag_last_pos
+    self.scroll_by(list, 0 - d)
     let t = self.now
     let dt = t - self.drag_last_time
     if dt > 0
-      self.drag_v = (0 - dy) / dt
+      self.drag_v = (0 - d) / dt
     end
-    self.drag_last_pos = y
+    self.drag_last_pos = pos
     self.drag_last_time = t
   end
 
@@ -1093,7 +1186,15 @@ class App
     if list < 0
       return
     end
-    self.scroll_by(list, 0 - dy * self.scroll_line)
+    if self.root.horizontal_at(list)
+      var d = dx
+      if d == 0
+        d = dy
+      end
+      self.scroll_by(list, 0 - d * self.scroll_line)
+    else
+      self.scroll_by(list, 0 - dy * self.scroll_line)
+    end
   end
 
   ## Set the wheel scroll line-height factor (px per wheel click). Default

@@ -271,6 +271,7 @@ class Col
   border_b_of: Hash[Int, Int]
   corner_of: Hash[Int, Int]
   viewport_of: Hash[Int, Int]
+  horizontal_of: Hash[Int, Bool]
   values: Array[State[String]]
   value_of: Hash[Int, Int]
   input_width_of: Hash[Int, Int]
@@ -327,6 +328,7 @@ class Col
     self.border_b_of = Hash.new
     self.corner_of = Hash.new
     self.viewport_of = Hash.new
+    self.horizontal_of = Hash.new
     self.values = Array.new
     self.value_of = Hash.new
     self.input_width_of = Hash.new
@@ -606,6 +608,26 @@ class Col
     self.close_container(prev)
   end
 
+  ## A HORIZONTALLY-scrolling list (F2): like `list`, but children stack + scroll
+  ## on the X axis and the viewport is a fixed WIDTH. Reuses `kind_list` (so all
+  ## the clip/scroll/hit/scrollbar machinery is shared) + a per-node horizontal
+  ## flag the layout/paint/hit passes read.
+  ##
+  ##   root.hlist(200) do |c: &var Col|
+  ##     c.text("col 1")
+  ##     c.text("col 2")            # overflows 200px → clips + scrolls on X
+  ##   end
+  def var hlist(viewport_w: Int, &block: Fn[(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.viewport_of.insert(id, viewport_w)
+    self.horizontal_of.insert(id, true)
+    let prev = self.open_container(kind_list())
+    if block_defined?
+      yield &var *self
+    end
+    self.close_container(prev)
+  end
+
   ## A REACTIVE list: like `list`, but its children are built from a shared
   ## `ListModel` and REBUILT whenever the model changes. The one structural-
   ## reactivity construct (docs/decisions/structural-reactivity.md):
@@ -820,11 +842,21 @@ class Col
     end
   end
 
-  ## Fixed viewport height of list `i`, or 0 (not a list / out of range).
+  ## Fixed viewport extent of list `i` (height for a vlist, WIDTH for an hlist),
+  ## or 0 (not a list / out of range).
   def viewport_at(i: Int) -> Int
     match self.viewport_of.get(i)
       Some(v) -> *v
       nil -> 0
+    end
+  end
+
+  ## True when list `i` scrolls HORIZONTALLY (built with `hlist`); false for a
+  ## vertical list or any non-list.
+  def horizontal_at(i: Int) -> Bool
+    match self.horizontal_of.get(i)
+      Some(v) -> *v
+      nil -> false
     end
   end
 

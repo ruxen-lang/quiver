@@ -7,6 +7,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **F2 gestures & scrolling (2/2) — scrollbars + horizontal scroll**
+  (`docs/LAYOUT.md` F2), completing Phase 1.
+  - **Scrollbars (paint-only).** When a list's content overflows its viewport, a
+    rounded thumb is painted on the trailing edge (right for a vlist, bottom for
+    an hlist), AFTER the clip/translate restore so it sits in viewport space and
+    does not scroll with the content. Geometry from the ratios:
+    `thumb_len = viewport² / content` (min-clamped), `thumb_pos = start +
+    (viewport − len) * scroll / max_scroll`. No fade/animation. New
+    `scrollbar_visible?` / `scrollbar_thumb_h` (length) / `scrollbar_thumb_y`
+    (position) on `App`; `paint_scrollbar` in the pass. Pinned by
+    `tests/scrollbar.rx` (7). **Design event:** `tests/list.rx`'s two
+    "restore is last" assertions became "restore is second-to-last, scrollbar
+    round-rect is last" — the overflowing 4-item list now draws a thumb (noted
+    inline).
+  - **Horizontal scroll (`hlist`).** `root.hlist(viewport_w)` reuses `kind_list`
+    + a per-node `horizontal` flag, so all the clip/scroll/hit/scrollbar/fling
+    machinery is shared on an axis-tagged offset. Children stack + clip + scroll
+    on X; the box is the fixed viewport width; paint translates on X; hit-test
+    and `list_under` accumulate the X offset; the wheel scrolls on `dx` (dy
+    fallback); drag-scroll tracks the X position; the scrollbar is a horizontal
+    bar. The vertical path is byte-identical (axis generalization defaults to Y).
+    Pinned by `tests/hlist.rx` (7) — layout, content extent, X wheel, X
+    clip/translate, X-scroll hit-test, horizontal scrollbar, X drag.
+  - Suite **186 → 200**; all three examples build. **Phase 1 (F1 + F2) complete.**
 - **F2 gestures & scrolling (1/2) — pixel scroll, fling momentum, tap vs
   long-press** (`docs/LAYOUT.md` F2). Built on an injected clock seam that
   mirrors `set_measure`, so all of it is deterministic and headless-pinnable.

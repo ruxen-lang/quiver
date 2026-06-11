@@ -355,8 +355,33 @@ end
 
 Viewport height is stored in a per-node `Int` hash on `Col` (flat-arena
 discipline; absent ⇒ not a list), keyed by `kind_list`. Pinned by
-`tests/list.rx`. Horizontal scroll, virtualization, and scrollbars are deferred
-(additive).
+`tests/list.rx`. Virtualization is deferred (additive).
+
+**Scrollbars (F2).** When a list's content overflows its viewport, a rounded
+thumb paints on the trailing edge (right for a vlist, bottom for an hlist), sized
+and positioned from the ratios `thumb_len = viewport² / content` (min-clamped)
+and `thumb_pos = start + (viewport − len) * scroll / max_scroll`. It paints in
+viewport space *after* the clip restore, so it overlays content and does not
+scroll. No fade/animation. `scrollbar_visible?` / `scrollbar_thumb_h` (length) /
+`scrollbar_thumb_y` (position) expose the geometry; pinned by `tests/scrollbar.rx`.
+
+**Horizontal scroll (F2): `hlist`.** `root.hlist(viewport_w) do |c| … end` is a
+horizontally-scrolling list — children stack + clip + scroll on **X**, the
+viewport is a fixed width, and the scrollbar is a horizontal bar at the bottom:
+
+```ruxen
+root.hlist(200) do |c: &var Col|
+  c.text("col 1")
+  c.text("col 2")            # overflows 200px → clips + scrolls on X
+end
+```
+
+`hlist` reuses `kind_list` plus a per-node `horizontal` flag, so the clip /
+scroll / hit-test / fling / scrollbar machinery is shared on an axis-tagged
+offset (the vertical path is byte-identical). The wheel scrolls on `dx` (falling
+back to `dy` so a plain vertical wheel still moves it); drag-scroll tracks the X
+position. Pinned by `tests/hlist.rx`. Virtualization for very long rows is
+deferred.
 
 ### Single-line text `Input`
 

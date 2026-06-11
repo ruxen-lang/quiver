@@ -11,7 +11,6 @@
 ##     See docs/decisions/direct-paint-backend.md.
 ##
 ## Colors are 0-255 RGB Ints. Coordinates are device-independent pixels.
-
 ## Required methods (doc comments between mixin signatures trip the v1
 ## parser, so they live here):
 ##   fill_clear(r, g, b)                   — fill the whole surface
@@ -27,7 +26,17 @@ mixin PaintSurface
   def fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
   def draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
   def fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
-  def stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+  def stroke_round_rect(
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int,
+    radius: Int,
+    width: Int,
+    r: Int,
+    g: Int,
+    b: Int,
+  ) -> nil
   def push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
   def push_translate(dx: Int, dy: Int) -> nil
   def pop_state -> nil
@@ -35,20 +44,28 @@ end
 
 ## Display-list op codes (plain Ints, like the node kinds in `dsl.rx`).
 def op_clear -> Int { 0 }
+
 def op_rect -> Int { 1 }
+
 def op_text -> Int { 2 }
+
 ## Container styling: a filled rounded rect (background) and a stroked rounded
 ## rect (border). Carry an extra radius and (for the stroke) a width — see the
 ## `rad`/`sw` parallel arrays on `RecordingSurface`.
 def op_round_rect -> Int { 3 }
+
 def op_stroke_rect -> Int { 4 }
+
 ## Scroll/clip ops (a list clips its viewport + translates by -offset). `op_save`
 ## pushes state, `op_clip` intersects the clip to a rect, `op_translate` shifts
 ## the origin by (x, y), `op_restore` pops back. `op_save` is paired with the
 ## clip; the example binary issues one canvas `save` then `clip_rect`.
 def op_save -> Int { 5 }
+
 def op_clip -> Int { 6 }
+
 def op_translate -> Int { 7 }
+
 def op_restore -> Int { 8 }
 
 ## quiver's in-package PaintSurface implementor and headless test double. It
@@ -68,11 +85,7 @@ def op_restore -> Int { 8 }
 ## the paint pass drives a SECOND implementor identically, canvas-free.
 ## Stays 100% canvas-free: only Ints and Strings cross this boundary.
 class RecordingSurface
-  include PaintSurface
-
-  ## Formatted command log (pinned by the test suite).
   commands: Array[String]
-  ## Structured mirror: op code + geometry + color, one entry per command.
   ops: Array[Int]
   xs: Array[Int]
   ys: Array[Int]
@@ -81,11 +94,8 @@ class RecordingSurface
   rs: Array[Int]
   gs: Array[Int]
   bs: Array[Int]
-  ## Corner radius (round/stroke-rect ops) and stroke width (stroke-rect),
-  ## 0 for ops that don't use them.
   rads: Array[Int]
   sws: Array[Int]
-  ## Text payload for op_text commands ("" otherwise).
   texts: Array[String]
 
   def init
@@ -123,7 +133,17 @@ class RecordingSurface
     self.record2(op_round_rect(), x, y, w, h, r, g, b, radius, 0, "")
   end
 
-  def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+  def var stroke_round_rect(
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int,
+    radius: Int,
+    width: Int,
+    r: Int,
+    g: Int,
+    b: Int,
+  ) -> nil
     self.commands.push("stroke_rect(#{x},#{y},#{w},#{h},#{radius},#{width},#{r},#{g},#{b})")
     self.record2(op_stroke_rect(), x, y, w, h, r, g, b, radius, width, "")
   end
@@ -145,14 +165,12 @@ class RecordingSurface
     self.record(op_restore(), 0, 0, 0, 0, 0, 0, 0, "")
   end
 
-  def size -> Int
-    self.commands.size as Int
-  end
+  def size -> Int { self.commands.size as Int }
 
   def command_at(i: Int) -> String
     match self.commands.get(i)
       Some(s) -> s.clone
-      nil     -> ""
+      nil -> ""
     end
   end
 
@@ -176,50 +194,32 @@ class RecordingSurface
   def op_at(i: Int) -> Int
     match self.ops.get(i)
       Some(v) -> *v
-      nil     -> -1
+      nil -> -1
     end
   end
 
-  def x_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.xs, i)
-  end
+  def x_at(i: Int) -> Int { RecordingSurface.int_at(&self.xs, i) }
 
-  def y_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.ys, i)
-  end
+  def y_at(i: Int) -> Int { RecordingSurface.int_at(&self.ys, i) }
 
-  def w_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.ws, i)
-  end
+  def w_at(i: Int) -> Int { RecordingSurface.int_at(&self.ws, i) }
 
-  def h_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.hs, i)
-  end
+  def h_at(i: Int) -> Int { RecordingSurface.int_at(&self.hs, i) }
 
-  def r_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.rs, i)
-  end
+  def r_at(i: Int) -> Int { RecordingSurface.int_at(&self.rs, i) }
 
-  def g_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.gs, i)
-  end
+  def g_at(i: Int) -> Int { RecordingSurface.int_at(&self.gs, i) }
 
-  def b_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.bs, i)
-  end
+  def b_at(i: Int) -> Int { RecordingSurface.int_at(&self.bs, i) }
 
-  def rad_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.rads, i)
-  end
+  def rad_at(i: Int) -> Int { RecordingSurface.int_at(&self.rads, i) }
 
-  def sw_at(i: Int) -> Int
-    RecordingSurface.int_at(&self.sws, i)
-  end
+  def sw_at(i: Int) -> Int { RecordingSurface.int_at(&self.sws, i) }
 
   def text_at(i: Int) -> String
     match self.texts.get(i)
       Some(s) -> s.clone
-      nil     -> ""
+      nil -> ""
     end
   end
 
@@ -228,7 +228,7 @@ class RecordingSurface
   def self.int_at(arr: &Array[Int], i: Int) -> Int
     match arr.get(i)
       Some(v) -> *v
-      nil     -> 0
+      nil -> 0
     end
   end
 
@@ -238,7 +238,19 @@ class RecordingSurface
 
   ## Lower-level record carrying the extra radius + stroke-width fields used by
   ## the rounded/stroked rect ops (0 for the others).
-  def var record2(op: Int, x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int, radius: Int, width: Int, text: String) -> nil
+  def var record2(
+    op: Int,
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int,
+    r: Int,
+    g: Int,
+    b: Int,
+    radius: Int,
+    width: Int,
+    text: String,
+  ) -> nil
     self.ops.push(op)
     self.xs.push(x)
     self.ys.push(y)
@@ -251,6 +263,10 @@ class RecordingSurface
     self.sws.push(width)
     self.texts.push(text)
   end
+
+  public
+
+  include PaintSurface
 end
 
 ## Paint one node. Containers (Row/Col) draw their style — a background
@@ -316,7 +332,16 @@ def paint_slider[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
     surface.fill_round_rect(x, track_y, fill_w, slider_track_h(), radius, 100, 100, 200)
   end
   let ty = y + (row_height() - slider_thumb()) / 2
-  surface.fill_round_rect(cx - slider_thumb() / 2, ty, slider_thumb(), slider_thumb(), slider_thumb() / 2, 60, 60, 160)
+  surface.fill_round_rect(
+    cx - slider_thumb() / 2,
+    ty,
+    slider_thumb(),
+    slider_thumb(),
+    slider_thumb() / 2,
+    60,
+    60,
+    160,
+  )
 end
 
 ## Paint a checkbox: a bordered square box, a filled inner mark WHEN checked,
@@ -361,10 +386,29 @@ def paint_container_style[S: PaintSurface](app: &App, surface: &var S, i: Int) -
   let h = app.h_of(i)
   let radius = app.root.corner_at(i)
   if app.root.has_bg_at(i)
-    surface.fill_round_rect(x, y, w, h, radius, app.root.bg_r_at(i), app.root.bg_g_at(i), app.root.bg_b_at(i))
+    surface.fill_round_rect(
+      x,
+      y,
+      w,
+      h,
+      radius,
+      app.root.bg_r_at(i),
+      app.root.bg_g_at(i),
+      app.root.bg_b_at(i),
+    )
   end
   if app.root.has_border_at(i)
-    surface.stroke_round_rect(x, y, w, h, radius, app.root.border_w_at(i), app.root.border_r_at(i), app.root.border_g_at(i), app.root.border_b_at(i))
+    surface.stroke_round_rect(
+      x,
+      y,
+      w,
+      h,
+      radius,
+      app.root.border_w_at(i),
+      app.root.border_r_at(i),
+      app.root.border_g_at(i),
+      app.root.border_b_at(i),
+    )
   end
 end
 
@@ -379,7 +423,6 @@ def paint_all[S: PaintSurface](app: &App, surface: &var S) -> nil
     paint_tree(app, surface, node)
     node = app.root.next_sibling_of(node)
   end
-  # The overlay paints LAST so it sits on top of all normal content.
   if app.overlay_open?
     paint_overlay(app, surface)
   end
@@ -419,7 +462,11 @@ def paint_tree[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   let is_list = app.root.list_at(i)
   if is_list
     surface.push_clip(app.x_of(i), app.y_of(i), app.w_of(i), app.h_of(i))
-    surface.push_translate(0, 0 - app.scroll_of(i))
+    if app.root.horizontal_at(i)
+      surface.push_translate(0 - app.scroll_of(i), 0)
+    else
+      surface.push_translate(0, 0 - app.scroll_of(i))
+    end
   end
   var c = app.root.first_child_of(i)
   while c >= 0
@@ -428,6 +475,26 @@ def paint_tree[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   end
   if is_list
     surface.pop_state
+    paint_scrollbar(app, surface, i)
+  end
+end
+
+## Paint a list's scrollbar thumb (paint-only; docs/LAYOUT.md F2): a rounded rect
+## on the list's right edge, sized + positioned from the viewport/content/scroll
+## ratios. Drawn only when the content overflows the viewport. No fade/animation.
+def paint_scrollbar[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  if !app.scrollbar_visible?(i)
+    return
+  end
+  let pos = app.scrollbar_thumb_y(i)
+  let len = app.scrollbar_thumb_h(i)
+  let r = scrollbar_w() / 2
+  if app.root.horizontal_at(i)
+    let ty = app.y_of(i) + app.h_of(i) - scrollbar_w()
+    surface.fill_round_rect(pos, ty, len, scrollbar_w(), r, 160, 160, 160)
+  else
+    let tx = app.x_of(i) + app.w_of(i) - scrollbar_w()
+    surface.fill_round_rect(tx, pos, scrollbar_w(), len, r, 160, 160, 160)
   end
 end
 
@@ -436,8 +503,6 @@ end
 ## repaints exactly the nodes whose tracking scopes read it.
 def paint_dirty[S: PaintSurface](app: &App, surface: &var S, nodes: &Array[Int]) -> nil
   for i in nodes
-    # Erase the full row span (monotonic max width) — safe because each
-    # row holds exactly one node, and immune to labels that shrink.
     surface.fill_rect(0, app.y_of(*i), app.span_w, app.h_of(*i), 255, 255, 255)
     paint_node(app, surface, *i)
   end
