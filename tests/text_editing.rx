@@ -1,0 +1,226 @@
+# Pins F3 — production text editing (docs/decisions/text-editing.md): selection
+# (anchor+caret, drag-select, shift-extend), clipboard copy/cut/paste through an
+# injected fake seam, selection-aware editing, IME marked text + commit, the
+# multi-line textarea caret navigation, and per-input undo. All headless: a fake
+# measure closure for selection geometry + a fake clipboard cell, no canvas.
+use std.sync.{Mutex, SharedSync}
+
+Tester.describe("F3 — selection, clipboard, IME, textarea, undo") do |t: &var Tester|
+  let form = { || App.build(do |ui: &var Ui, root: &var Col|
+        let name = ui.state_str("")
+        root.text("name:")
+        root.input(name, 100)
+      end) }
+  let input_y = { || row_height() + 2 }
+  let hello = do ||
+      var app = form.()
+      app.pointer_down(4, input_y.())
+      app.type_char(104)
+      app.type_char(101)
+      app.type_char(108)
+      app.type_char(108)
+      app.type_char(111)
+      app.flush
+      app
+    end
+  t.it("a fresh focus has no selection (anchor == caret)") do ||
+    var app = hello.()
+    t.expect(app.has_selection?(1)).to_eq(false)
+    t.expect(app.anchor_of(1)).to_eq(app.caret_of(1))
+  end
+  t.it("shift+left extends a selection leaving the anchor fixed") do ||
+    var app = hello.()
+    app.key_down_mod(key_left(), true, false)
+    app.key_down_mod(key_left(), true, false)
+    t.expect(app.has_selection?(1)).to_eq(true)
+    t.expect(app.sel_start_of(1)).to_eq(3)
+    t.expect(app.sel_end_of(1)).to_eq(5)
+    t.expect(app.selected_text(1)).to_eq("lo")
+  end
+  t.it("a plain arrow collapses the selection") do ||
+    var app = hello.()
+    app.key_down_mod(key_left(), true, false)
+    t.expect(app.has_selection?(1)).to_eq(true)
+    app.key_down_mod(key_left(), false, false)
+    t.expect(app.has_selection?(1)).to_eq(false)
+  end
+  t.it("select_all selects the whole value") do ||
+    var app = hello.()
+    app.select_all(1)
+    t.expect(app.sel_start_of(1)).to_eq(0)
+    t.expect(app.sel_end_of(1)).to_eq(5)
+    t.expect(app.selected_text(1)).to_eq("hello")
+  end
+  t.it("a pointer drag selects a char range (char_index from measured prefixes)") do ||
+    var app = hello.()
+    app.set_measure({ |s: String, sz: Int| s.size as Int * 10 })
+    app.pointer_down(pad_x() + 10 + 2, input_y.())
+    app.pointer_move(pad_x() + 40 + 2, input_y.())
+    t.expect(app.sel_start_of(1)).to_eq(1)
+    t.expect(app.sel_end_of(1)).to_eq(4)
+    t.expect(app.selected_text(1)).to_eq("ell")
+    app.pointer_up(pad_x() + 40 + 2, input_y.())
+  end
+  t.it("typing with a selection replaces it") do ||
+    var app = hello.()
+    app.select_all(1)
+    app.type_char(121)
+    app.flush
+    t.expect(app.text_of(1)).to_eq("y")
+    t.expect(app.caret_of(1)).to_eq(1)
+    t.expect(app.has_selection?(1)).to_eq(false)
+  end
+  t.it("backspace with a selection deletes the whole selection") do ||
+    var app = hello.()
+    app.key_down_mod(key_left(), true, false)
+    app.key_down_mod(key_left(), true, false)
+    app.key(key_backspace())
+    app.flush
+    t.expect(app.text_of(1)).to_eq("hel")
+    t.expect(app.caret_of(1)).to_eq(3)
+  end
+  t.it("forward-delete with a selection deletes the selection") do ||
+    var app = hello.()
+    app.select_all(1)
+    app.key(key_delete())
+    app.flush
+    t.expect(app.text_of(1)).to_eq("")
+    t.expect(app.caret_of(1)).to_eq(0)
+  end
+  t.it("copy writes the selection to the clipboard seam") do ||
+    var app = hello.()
+    let board = ClipboardCell.new
+    let bget = board.clone
+    let bset = board.clone
+    app.set_clipboard({ || bget.text }, { |s: String| bset.put(s) })
+    app.key_down_mod(key_left(), true, false)
+    app.key_down_mod(key_left(), true, false)
+    app.copy
+    t.expect(board.text).to_eq("lo")
+    t.expect(app.text_of(1)).to_eq("hello")
+  end
+  t.it("cut copies the selection then deletes it") do ||
+    var app = hello.()
+    let board = ClipboardCell.new
+    let bget = board.clone
+    let bset = board.clone
+    app.set_clipboard({ || bget.text }, { |s: String| bset.put(s) })
+    app.select_all(1)
+    app.cut
+    app.flush
+    t.expect(board.text).to_eq("hello")
+    t.expect(app.text_of(1)).to_eq("")
+  end
+  t.it("paste inserts the clipboard text at the caret, replacing a selection") do ||
+    var app = hello.()
+    let board = ClipboardCell.new
+    board.put("XY")
+    let bget = board.clone
+    let bset = board.clone
+    app.set_clipboard({ || bget.text }, { |s: String| bset.put(s) })
+    app.key(key_home())
+    app.paste
+    app.flush
+    t.expect(app.text_of(1)).to_eq("XYhello")
+    t.expect(app.caret_of(1)).to_eq(2)
+  end
+  t.it("copy/cut/paste are inert with no clipboard seam injected") do ||
+    var app = hello.()
+    t.expect(app.clipboarded?).to_eq(false)
+    app.select_all(1)
+    app.copy
+    app.paste
+    app.flush
+    t.expect(app.text_of(1)).to_eq("hello")
+  end
+  t.it("text_editing sets marked text; a committing text_input replaces it") do ||
+    var app = hello.()
+    app.key(key_end())
+    app.text_editing(0, 0, "n")
+    t.expect(app.marked_text_of(1)).to_eq("n")
+    app.flush
+    app.text_input(110)
+    t.expect(app.marked_text_of(1)).to_eq("")
+    app.flush
+    t.expect(app.text_of(1)).to_eq("hellon")
+  end
+  let area = { || App.build(do |ui: &var Ui, root: &var Col|
+        let body = ui.state_str("ab\ncde\nf")
+        root.textarea(body, 200, 4)
+      end) }
+  t.it("a textarea is rows*row_height tall and multiline") do ||
+    var app = area.()
+    t.expect(app.root.multiline_at(0)).to_eq(true)
+    t.expect(app.h_of(0)).to_eq(4 * row_height())
+    t.expect(app.w_of(0)).to_eq(200)
+  end
+  t.it("down arrow moves the caret to the next line, preserving the column") do ||
+    var app = area.()
+    app.pointer_down(2, 2)
+    app.place_caret(0, 1)
+    app.key_down_mod(key_down_arrow(), false, false)
+    t.expect(app.caret_of(0)).to_eq(4)
+    t.expect(app.caret_line_of(0)).to_eq(1)
+  end
+  t.it("down arrow onto a shorter line clamps the column to the line end") do ||
+    var app = area.()
+    app.pointer_down(2, 2)
+    app.place_caret(0, 6)
+    app.key_down_mod(key_down_arrow(), false, false)
+    t.expect(app.caret_of(0)).to_eq(8)
+    t.expect(app.caret_line_of(0)).to_eq(2)
+  end
+  t.it("home/end act on the caret's LINE, not the whole buffer") do ||
+    var app = area.()
+    app.pointer_down(2, 2)
+    app.place_caret(0, 5)
+    app.key(key_home())
+    t.expect(app.caret_of(0)).to_eq(3)
+    app.key(key_end())
+    t.expect(app.caret_of(0)).to_eq(6)
+  end
+  t.it("undo restores the exact prior value and caret (separate entries)") do ||
+    var app = form.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(4, input_y.())
+    app.type_char(97)
+    app.flush
+    let v1 = app.text_of(1)
+    ms.set(&var clk, undo_group_ms() + 1)
+    app.key(key_end())
+    app.type_char(98)
+    app.flush
+    t.expect(app.text_of(1)).to_eq("ab")
+    app.undo
+    app.flush
+    t.expect(app.text_of(1)).to_eq(v1)
+    t.expect(app.caret_of(1)).to_eq(1)
+  end
+  t.it("rapid typing coalesces into ONE undo entry") do ||
+    var app = form.()
+    var clk = Ui.new
+    let ms = clk.state(100)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(4, input_y.())
+    app.type_char(97)
+    app.type_char(98)
+    app.type_char(99)
+    app.flush
+    t.expect(app.text_of(1)).to_eq("abc")
+    app.undo
+    app.flush
+    t.expect(app.text_of(1)).to_eq("")
+  end
+  t.it("undo with an empty history is a no-op") do ||
+    var app = hello.()
+    var n = 0
+    while n < 10
+      app.undo
+      n = n + 1
+    end
+    app.flush
+    t.expect(app.focused_node).to_eq(1)
+  end
+end

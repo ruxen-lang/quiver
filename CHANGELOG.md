@@ -7,6 +7,47 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **F3 — production text editing** (`docs/decisions/text-editing.md`): the
+  single-line `input` grew a full editing surface, all App-level runtime state
+  reached through App entry points or injected seams (quiver stays canvas-free).
+  Every piece is default-inert — a plain `input` is byte-identical to before.
+  - **Selection (anchor + caret).** Per-input `anchor` + `caret`; selection =
+    their `[min, max]`. Pointer drag-select reuses the `captured` drag primitive
+    (generalised from sliders to inputs); keyboard shift-extend keeps the anchor.
+    Caret/selection x come from **measured prefixes** (`prefix_width`, the measure
+    seam; char-metric fallback — default caret position unchanged). New readers:
+    `anchor_of` / `sel_start_of` / `sel_end_of` / `has_selection?` /
+    `selected_text` / `select_all` / `caret_x_of` / `place_caret`.
+  - **Modifier keys.** `key_down_mod(code, shift, ctrl)` — shift extends the
+    selection, ctrl runs clipboard/undo shortcuts (c/x/v/z, a). **`key_down` (and
+    the `key` alias) now forward to `key_down_mod(code, false, false)`** — fully
+    back-compat. canvas delivers no key modifiers yet (filed gap); shells pass
+    `false`/`false`, so keyboard selection-extend + ctrl-shortcuts are reachable
+    via this API + headless tests but dormant on a real window.
+  - **Clipboard seam.** `set_clipboard(get, set)` (the measure/clock 0-or-1-pool
+    pattern) + App-level `copy` / `cut` / `paste` on the focused selection
+    (single-lock RMW). Headless backend: **`ClipboardCell`** (a shared `Send`
+    String cell, like `RecordingSurface` for paint — a bare `Mutex[String]`
+    corrupts through a closure on this ruxen build). `clipboarded?` reports state.
+  - **IME composition.** `text_editing(start, len, text)` stores marked text;
+    paint renders it inline + underlined at the caret; the committing `TextInput`
+    clears the mark and inserts (mirrors canvas/SDL's `TextEditing` →
+    `composition_text` → `TextInput` sequence). Reader: `marked_text_of`.
+  - **Multi-line `textarea`.** `root.textarea(state, width, rows)` — one
+    `State[String]` with `\n` separators, flat caret index, `rows * row_height`
+    box. Up/down cross lines preserving the column; home/end act on the caret's
+    line. Reuses all single-line machinery. New `multiline_at` / `rows_at` on
+    `Col`.
+  - **Undo.** Per-input bounded `(value, caret)` snapshot ring with clock-distance
+    coalescing (rapid typing = one entry); `undo` restores the exact prior state;
+    a redo stack is kept. `undo_group_ms` tuning constant.
+  - Suite **200 → 220** (`tests/text_editing.rx`, 20); all three examples build.
+    The single-line `input`/`caret_edit` pins stay green unchanged.
+  - **Toolchain note (filed):** a non-Copy class CALL-RESULT passed directly as a
+    by-value method argument corrupts (already a known landmine) — `cut`'s
+    `clip_write(selected_cached(i))` hit it; fixed by `let`-binding. AND a bare
+    `Mutex[String]` set/get THROUGH A CLOSURE corrupts (new observation, 2026-06-11)
+    — `ClipboardCell` (a `Send` class owning the `String`) is the sound workaround.
 - **F2 gestures & scrolling (2/2) — scrollbars + horizontal scroll**
   (`docs/LAYOUT.md` F2), completing Phase 1.
   - **Scrollbars (paint-only).** When a list's content overflows its viewport, a

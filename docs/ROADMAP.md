@@ -160,6 +160,41 @@ same pass + seams, none reopens the own-flex-vs-Yoga decision):**
 - [ ] Sub-click Float32 wheel precision (needs the Float seam)
 - [ ] Stack z-index reordering distinct from build order; clip-to-stack
 
+### Phase 2 — F4 animation + F3 prod text editing (2026-06-11)
+
+**F3 — production text editing** (`docs/decisions/text-editing.md`): the
+single-line `input` extended into a full editing surface. All App-level runtime
+state via App entry points / injected seams; quiver stays canvas-free; every
+piece default-inert.
+
+- [x] **Selection** (anchor + caret) — pointer drag-select (reuses the `captured`
+      drag primitive), keyboard shift-extend (anchor held), caret/selection x from
+      measured prefixes (`prefix_width`, measure seam; char-metric fallback). New
+      `key_down_mod(code, shift, ctrl)`; `key_down`/`key` forward with both false
+      (back-compat). Pinned by `tests/text_editing.rx`.
+- [x] **Clipboard** — `set_clipboard(get, set)` seam + `copy`/`cut`/`paste` on the
+      focused selection; headless backend `ClipboardCell` (a `Send` String cell).
+      Pinned by `tests/text_editing.rx`.
+- [x] **Selection-aware editing** — typing/backspace/forward-delete replace a
+      non-empty selection first, then collapse it. Pinned.
+- [x] **IME composition** — `text_editing(start, len, text)` marked-text store +
+      underlined inline render; commit clears the mark + inserts. Pinned.
+- [x] **Multi-line `textarea`** — `root.textarea(state, width, rows)`, single
+      `\n`-String, flat caret index, line navigation (up/down preserve column,
+      home/end per-line). Pinned.
+- [x] **Undo** — per-input bounded `(value, caret)` snapshot ring, clock-distance
+      coalescing, redo stack. Pinned.
+
+Suite **200 → 220**; all three examples build.
+
+**Deferred (filed):** real keyboard modifiers (canvas gap — `Event.KeyDown` needs
+a modifier bitmask), multi-line selection rects across lines, measured-x column on
+up/down, soft wrap, textarea internal scroll, word-granularity moves, double-click
+word select.
+
+**F4 — animation system** (`docs/decisions/animation.md`): _in progress (this
+phase) — explicit tweens + colour implicit transitions on the clock seam._
+
 ### Foundation (unblocks the whole widget library — do first)
 
 - [x] **Nested tree in the arena** — `Col` now owns children via flat parallel

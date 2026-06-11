@@ -275,6 +275,8 @@ class Col
   values: Array[State[String]]
   value_of: Hash[Int, Int]
   input_width_of: Hash[Int, Int]
+  multiline_of: Hash[Int, Bool]
+  rows_of: Hash[Int, Int]
   bools: Array[State[Bool]]
   bool_of: Hash[Int, Int]
   ints: Array[State[Int]]
@@ -332,6 +334,8 @@ class Col
     self.values = Array.new
     self.value_of = Hash.new
     self.input_width_of = Hash.new
+    self.multiline_of = Hash.new
+    self.rows_of = Hash.new
     self.bools = Array.new
     self.bool_of = Hash.new
     self.ints = Array.new
@@ -421,6 +425,32 @@ class Col
     self.value_of.insert(id, self.values.size as Int)
     self.values.push(value)
     self.input_width_of.insert(id, width)
+    self.link(id)
+  end
+
+  ## A MULTI-LINE text input (`textarea`) bound to a reactive `State[String]`,
+  ## with a fixed width and a fixed number of visible `rows` (the box is
+  ## `rows * row_height` tall). The value is one String with '\n' line separators
+  ## (no recursive line types — the caret is a flat char index; `App` navigates
+  ## lines by scanning newlines). It reuses ALL the single-line input machinery
+  ## (focus / caret / selection / clipboard / undo / IME); the `multiline` flag
+  ## drives multi-line layout + paint + up/down caret navigation (F3 — see
+  ## docs/decisions/text-editing.md).
+  ##
+  ##   let body = ui.state_str("line one\nline two")
+  ##   root.textarea(body, 240, 4)
+  def var textarea(value: State[String], width: Int, rows: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_input())
+    self.labels.push("")
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| value.get(ui2) })
+    self.handler_of.push(-1)
+    self.value_of.insert(id, self.values.size as Int)
+    self.values.push(value)
+    self.input_width_of.insert(id, width)
+    self.multiline_of.insert(id, true)
+    self.rows_of.insert(id, rows)
     self.link(id)
   end
 
@@ -732,6 +762,22 @@ class Col
 
   ## True when node `i` is a text input (focusable / editable).
   def input_at(i: Int) -> Bool { self.kind_at(i) == kind_input() }
+
+  ## True when input `i` is a MULTI-LINE textarea (false for a single-line input).
+  def multiline_at(i: Int) -> Bool
+    match self.multiline_of.get(i)
+      Some(v) -> *v
+      nil -> false
+    end
+  end
+
+  ## Visible row count of textarea `i` (1 for a single-line input / non-input).
+  def rows_at(i: Int) -> Int
+    match self.rows_of.get(i)
+      Some(v) -> *v
+      nil -> 1
+    end
+  end
 
   ## Fixed box width of input `i`, or 0 (not an input / out of range).
   def input_width_at(i: Int) -> Int

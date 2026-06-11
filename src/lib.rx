@@ -15,7 +15,6 @@
 ## public types must not collide with std (`Signal`, `Runner`, … are taken).
 ## The reactive handle is therefore `State[T]`, not `Signal[T]` as the
 ## original design sketch spelled it. See docs/REACTIVITY.md.
-
 use std.sync.{Mutex, SharedSync}
 
 ## The reactive graph: who is currently tracking, who subscribes to what,
@@ -31,13 +30,9 @@ use std.sync.{Mutex, SharedSync}
 ## to that state. `State.set`/`update` mark all subscribed scopes dirty;
 ## `App.flush` re-runs only those scopes.
 class Ui
-  ## Next fresh state id handed out by `state`.
   next_state_id: Int
-  ## The tracking scope currently being recorded, or -1 when none.
   current_scope: Int
-  ## state id -> set of subscribed tracking-scope ids.
   subs: Hash[Int, Set[Int]]
-  ## Tracking scopes invalidated since the last flush.
   dirty: Set[Int]
 
   def init
@@ -48,25 +43,17 @@ class Ui
   end
 
   ## Create a fresh reactive Int state owned by this graph.
-  def var state(initial: Int) -> State[Int]
-    State[Int].new(self.fresh_id, initial)
-  end
+  def var state(initial: Int) -> State[Int] { State.new(self.fresh_id, initial) }
 
   ## Create a fresh reactive String state owned by this graph.
-  def var state_str(initial: String) -> State[String]
-    State[String].new(self.fresh_id, initial)
-  end
+  def var state_str(initial: String) -> State[String] { State.new(self.fresh_id, initial) }
 
   ## Create a fresh reactive Bool state owned by this graph.
-  def var state_bool(initial: Bool) -> State[Bool]
-    State[Bool].new(self.fresh_id, initial)
-  end
+  def var state_bool(initial: Bool) -> State[Bool] { State.new(self.fresh_id, initial) }
 
   ## Create a fresh shared `ListModel` (a dynamic list of items) owned by this
   ## graph. Its version `State[Int]` drives rebuilds of the bound `list_of`.
-  def var list_model -> ListModel
-    ListModel.new(State[Int].new(self.fresh_id, 0))
-  end
+  def var list_model -> ListModel { ListModel.new(State.new(self.fresh_id, 0)) }
 
   ## Subscribe the currently-recording tracking scope (if any) to `state_id`.
   def var subscribe(state_id: Int) -> nil
@@ -76,7 +63,7 @@ class Ui
       end
       match self.subs.get(state_id)
         Some(scopes) -> scopes.insert(self.current_scope)
-        nil          -> nil
+        nil -> nil
       end
     end
   end
@@ -93,9 +80,7 @@ class Ui
   ## Mark one tracking scope dirty directly (no state change). Used when a node
   ## must repaint for a reason other than a state read — e.g. a text input
   ## whose caret moved without editing the value.
-  def var mark_dirty(scope: Int) -> nil
-    self.dirty.insert(scope)
-  end
+  def var mark_dirty(scope: Int) -> nil { self.dirty.insert(scope) }
 
   ## Drop every subscription held by `scope`. Called before a tracking
   ## scope re-runs so its subscriptions always reflect its LAST run —
@@ -116,6 +101,8 @@ class Ui
     self.next_state_id = self.next_state_id + 1
     id
   end
+
+  public
 end
 
 ## A cheap, clonable handle to a piece of reactive state.
@@ -128,14 +115,10 @@ end
 ## All methods are *reading* methods (interior mutability via the Mutex),
 ## so any number of stored closures may capture one handle.
 class State[T: Send]
-  ## Key into the `Ui` subscription graph.
   id: Int
-  ## Shared value cell.
   cell: SharedSync[Mutex[T]]
 
-  def init(@id: Int, initial: T)
-    self.cell = SharedSync.new(Mutex.new(initial))
-  end
+  def init(@id: Int, initial: T) { self.cell = SharedSync.new(Mutex.new(initial)) }
 
   ## Read the value and subscribe the enclosing tracking scope (if any).
   def get(ui: &var Ui) -> T
@@ -179,6 +162,8 @@ class State[T: Send]
     let g = m.lock_raw
     g.set(f.(g.get))
   end
+
+  public
 end
 
 ## The shared payload behind a `ListModel`: the item labels + done flags as
@@ -187,13 +172,51 @@ end
 ## element type's Send-ness doesn't propagate — so we share a Send CLASS that
 ## owns the arrays directly; see docs/decisions/structural-reactivity.md).
 class TodoData
-  include Send
   labels: Array[String]
   done: Array[Bool]
 
   def init
     self.labels = Array.new
     self.done = Array.new
+  end
+
+  include Send
+end
+
+## A shared, mutable single-`String` cell — the headless clipboard backend for
+## the F3 clipboard seam (`App.set_clipboard`), analogous to `RecordingSurface`
+## being the headless paint backend. It is a thin clonable handle (pointer-copy of
+## the shared payload), so the seam's `get`/`set` closures and the test's assertion
+## can each hold a copy and observe the same text.
+##
+## Why a `Send` class and not `SharedSync[Mutex[String]]`: a bare `Mutex[String]`
+## set/get THROUGH A CLOSURE corrupts on this ruxen build (the String payload is
+## mis-handled across the closure boundary — verified 2026-06-11), exactly the
+## shape `TodoData` exists to avoid for arrays. Sharing a `Send` class that owns
+## the `String` directly (no `Mutex` wrapper) is sound.
+##
+##   let board = ClipboardCell.new
+##   app.set_clipboard({ || board.text }, { |s| board.put(s) })   # capture clones
+class ClipText
+  value: String
+
+  def init { self.value = "" }
+
+  include Send
+end
+
+class ClipboardCell
+  cell: SharedSync[ClipText]
+
+  def init { self.cell = SharedSync.new(ClipText.new) }
+
+  ## The current clipboard text.
+  def text -> String { self.cell.get.value.clone }
+
+  ## Replace the clipboard text.
+  def var put(s: String) -> nil
+    let d = self.cell.get
+    d.value = s.clone
   end
 end
 
@@ -209,30 +232,19 @@ end
 ## bumps it through ONE `State.update` (single-lock RMW), which marks the list's
 ## tracking scope dirty so `flush` rebuilds its child subtree.
 class ListModel
-  ## Reactive revision counter; the bound `list_of` subscribes to this.
   version: State[Int]
-  ## Shared item store (labels + done flags).
   cell: SharedSync[TodoData]
 
-  def init(@version: State[Int])
-    self.cell = SharedSync.new(TodoData.new)
-  end
+  def init(@version: State[Int]) { self.cell = SharedSync.new(TodoData.new) }
 
   ## Number of items (lock-free read).
-  def count -> Int
-    self.cell.get.labels.size as Int
-  end
-
-  ## Ruby synonyms for `count` — pure `alias`es (one body), so a caller can read
-  ## `model.size` / `model.length` as well as `model.count`.
-  alias size count
-  alias length count
+  def count -> Int { self.cell.get.labels.size as Int }
 
   ## Label of item `k`, or "" out of range.
   def label_at(k: Int) -> String
     match self.cell.get.labels.get(k)
       Some(s) -> s.clone
-      nil     -> ""
+      nil -> ""
     end
   end
 
@@ -240,7 +252,7 @@ class ListModel
   def done_at(k: Int) -> Bool
     match self.cell.get.done.get(k)
       Some(v) -> *v
-      nil     -> false
+      nil -> false
     end
   end
 
@@ -285,9 +297,9 @@ class ListModel
     let n = d.done.size as Int
     while i < n
       let cur = match d.done.get(i)
-        Some(v) -> *v
-        nil     -> false
-      end
+          Some(v) -> *v
+          nil -> false
+        end
       if i == k
         next.push(!cur)
       else
@@ -310,12 +322,12 @@ class ListModel
       if i != k
         match d.labels.get(i)
           Some(s) -> nl.push(s.clone)
-          nil     -> nil
+          nil -> nil
         end
         let dn = match d.done.get(i)
-          Some(v) -> *v
-          nil     -> false
-        end
+            Some(v) -> *v
+            nil -> false
+          end
         nd.push(dn)
       end
       i = i + 1
@@ -329,7 +341,10 @@ class ListModel
 
   ## Bump the version through ONE `State.update` — single-lock RMW that marks
   ## the bound list's tracking scope dirty for the next flush.
-  def bump(ui: &var Ui) -> nil
-    self.version.update(ui, { |v| v + 1 })
-  end
+  def bump(ui: &var Ui) -> nil { self.version.update(ui, { |v| v + 1 }) }
+
+  public
+
+  alias size count
+  alias length count
 end

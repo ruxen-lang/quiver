@@ -362,19 +362,91 @@ def paint_checkbox[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   surface.draw_text(&label, bx + box + pad_x(), y + baseline_drop(), 20, 20, 20)
 end
 
-## Paint a text input: a light field box, its text, and — only when focused — a
-## thin caret rect after the `caret`-th character. Caret x uses the char-metric
-## estimate (the same one layout uses; real Skia advance widths come later).
+## Paint a text input: a light field box; a selection highlight rect (only when a
+## selection is active, drawn BEHIND the text); its text; and — only when focused —
+## a thin caret rect at the caret's measured-prefix x. The caret/selection x now
+## come from `prefix_width` (the injected measure seam; char-metric fallback when
+## unset, so the default is byte-identical to the old `caret * char_width` math).
+## A multi-line `textarea` paints each line on its own row (F3); a single-line
+## input is the one-line case.
 def paint_input[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
   let x = app.x_of(i)
   let y = app.y_of(i)
   surface.fill_round_rect(x, y, app.w_of(i), app.h_of(i), 0, 245, 245, 245)
+  if app.root.multiline_at(i)
+    paint_textarea_body(app, surface, i)
+    return
+  end
+  if app.focused_node == i
+    if app.has_selection?(i)
+      let sx = x + pad_x() + app.prefix_width(i, app.sel_start_of(i))
+      let ex = x + pad_x() + app.prefix_width(i, app.sel_end_of(i))
+      surface.fill_rect(sx, y + 4, ex - sx, app.h_of(i) - 8, 180, 205, 245)
+    end
+  end
   let label = app.text_of(i)
   surface.draw_text(&label, x + pad_x(), y + baseline_drop(), 20, 20, 20)
   if app.focused_node == i
-    let cx = x + pad_x() + app.caret_of(i) * char_width()
+    paint_input_marked(app, surface, i, x, y)
+    let cx = x + pad_x() + app.prefix_width(i, app.caret_of(i))
     surface.fill_rect(cx, y + 4, 1, app.h_of(i) - 8, 20, 20, 20)
   end
+end
+
+## Paint the IME marked (composition) text of input `i`, when present: the marked
+## string drawn at the caret with a thin underline rect beneath it (no new op). The
+## marked text is what the user is composing BEFORE it commits as `text_input`.
+def paint_input_marked[S: PaintSurface](app: &App, surface: &var S, i: Int, x: Int, y: Int) -> nil
+  let marked = app.marked_text_of(i)
+  if marked.size as Int == 0
+    return
+  end
+  let mx = x + pad_x() + app.prefix_width(i, app.caret_of(i))
+  surface.draw_text(&marked, mx, y + baseline_drop(), 20, 20, 20)
+  let mw = app.text_width_of(marked)
+  surface.fill_rect(mx, y + baseline_drop() + 2, mw, ime_underline_h(), 20, 20, 20)
+end
+
+## Paint a multi-line `textarea`'s body: each '\n'-separated line on its own row,
+## plus the caret on its line at the measured column x. (Multi-line selection
+## highlight rects across lines are filed; the caret + per-line text are exact.)
+def paint_textarea_body[S: PaintSurface](app: &App, surface: &var S, i: Int) -> nil
+  let x = app.x_of(i)
+  let y = app.y_of(i)
+  let value = app.text_of(i)
+  var line = 0
+  var col_text = ""
+  for c in value.chars
+    if c == 10 as Char
+      draw_textarea_line(app, surface, i, &col_text, line)
+      line = line + 1
+      col_text = ""
+    else
+      col_text = "#{col_text}#{c}"
+    end
+  end
+  draw_textarea_line(app, surface, i, &col_text, line)
+  if app.focused_node == i
+    let caret = app.caret_of(i)
+    let cline = app.caret_line_of(i)
+    let ccol = caret - app.line_start_at(i, caret)
+    let cx = x + pad_x() + app.prefix_width(i, caret)
+    let cy = y + 4 + cline * row_height()
+    surface.fill_rect(cx, cy, 1, row_height() - 8, 20, 20, 20)
+  end
+end
+
+## Draw one textarea line `line` of input `i`'s body at its row.
+def draw_textarea_line[S: PaintSurface](
+  app: &App,
+  surface: &var S,
+  i: Int,
+  text: &String,
+  line: Int,
+) -> nil
+  let x = app.x_of(i)
+  let y = app.y_of(i)
+  surface.draw_text(text, x + pad_x(), y + baseline_drop() + line * row_height(), 20, 20, 20)
 end
 
 ## Paint a container's background fill and border (each only if set), at its

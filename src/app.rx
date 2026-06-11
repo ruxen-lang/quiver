@@ -46,6 +46,11 @@ def key_home -> Int { 1073741898 }
 
 def key_end -> Int { 1073741901 }
 
+## SDL up/down arrows — caret line navigation in a multi-line `textarea` (F3).
+def key_up -> Int { 1073741906 }
+
+def key_down_arrow -> Int { 1073741905 }
+
 ## --- F2 gesture/fling tuning (docs/LAYOUT.md F2) ---
 ## Fling decay numerator/denominator per `tick`: velocity *= num/den each step
 ## (≈ 0.92). Integer ratio so stepping is deterministic under the fake clock.
@@ -69,6 +74,15 @@ def scrollbar_w -> Int { 4 }
 
 def scrollbar_min_thumb -> Int { 12 }
 
+## --- F3 text-editing tuning (docs/decisions/text-editing.md) ---
+## Undo coalescing window: edits within this many clock units of the previous
+## one fold into a single undo entry (rapid typing = one undo). 0 disables
+## coalescing (every edit is its own entry).
+def undo_group_ms -> Int { 400 }
+
+## Marked (IME composition) underline thickness (px) drawn beneath marked text.
+def ime_underline_h -> Int { 2 }
+
 class App
   ui: Ui
   root: Col
@@ -82,6 +96,19 @@ class App
   content_h: Hash[Int, Int]
   focused: Int
   caret: Hash[Int, Int]
+  anchor: Hash[Int, Int]
+  caret_drag: Int
+  clip_get_fns: Array[any Fn[Fn() -> String]]
+  clip_set_fns: Array[any Fn[Fn(String) -> nil]]
+  has_clipboard: Bool
+  mark_text: Hash[Int, String]
+  mark_start: Hash[Int, Int]
+  mark_len: Hash[Int, Int]
+  undo_vals: Hash[Int, Array[String]]
+  undo_carets: Hash[Int, Array[Int]]
+  redo_vals: Hash[Int, Array[String]]
+  redo_carets: Hash[Int, Array[Int]]
+  undo_last_time: Hash[Int, Int]
   captured: Int
   overlay_owner: Int
   overlay_x: Int
@@ -120,6 +147,19 @@ class App
     self.content_h = Hash.new
     self.focused = -1
     self.caret = Hash.new
+    self.anchor = Hash.new
+    self.caret_drag = -1
+    self.clip_get_fns = Array.new
+    self.clip_set_fns = Array.new
+    self.has_clipboard = false
+    self.mark_text = Hash.new
+    self.mark_start = Hash.new
+    self.mark_len = Hash.new
+    self.undo_vals = Hash.new
+    self.undo_carets = Hash.new
+    self.redo_vals = Hash.new
+    self.redo_carets = Hash.new
+    self.undo_last_time = Hash.new
     self.captured = -1
     self.overlay_owner = -1
     self.overlay_x = 0
@@ -373,6 +413,9 @@ class App
   def measure_h(i: Int) -> Int
     if self.root.list_at(i) && !self.root.horizontal_at(i)
       return self.root.viewport_at(i)
+    end
+    if self.root.multiline_at(i)
+      return self.root.rows_at(i) * row_height()
     end
     if !self.root.container_at(i)
       return row_height()
@@ -932,7 +975,7 @@ class App
     let i = self.hit_test(x, y)
     if i >= 0
       if self.root.input_at(i)
-        self.focused = i
+        self.focus_input_at(i, x, y)
       elsif self.root.slider_at(i)
         self.captured = i
         self.set_slider_from_x(i, x)
@@ -947,6 +990,19 @@ class App
       self.begin_scroll_drag(x, y)
     end
     i
+  end
+
+  ## Focus input `i` from a pointer press at (x, y): set the caret to the char
+  ## under x (via measured prefixes), collapse the selection there (anchor =
+  ## caret), and begin a caret-drag so a subsequent `pointer_move` extends a
+  ## selection. (F3 — docs/decisions/text-editing.md.)
+  def var focus_input_at(i: Int, x: Int, y: Int) -> nil
+    self.focused = i
+    let c = self.char_index_at_x(i, x)
+    self.caret.insert(i, c)
+    self.anchor.insert(i, c)
+    self.caret_drag = i
+    self.ui.mark_dirty(i)
   end
 
   ## Arm a long-press on node `i` if it has a long-press handler: record the press
@@ -1007,6 +1063,10 @@ class App
     self.hover_y = y
     self.hovered = true
     self.long_press_check_slop(x, y)
+    if self.caret_drag >= 0
+      self.extend_selection_to_x(self.caret_drag, x)
+      return self.caret_drag
+    end
     if self.scroll_captured >= 0
       self.drag_scroll(x, y)
       return self.scroll_captured
@@ -1053,6 +1113,7 @@ class App
   ## before the threshold is a plain tap, already handled on down).
   def var pointer_up(x: Int, y: Int) -> nil
     self.captured = -1
+    self.caret_drag = -1
     self.lp_node = -1
     if self.scroll_captured >= 0
       self.fling_v.insert(self.scroll_captured, self.drag_v)
@@ -1114,6 +1175,103 @@ class App
     end
   end
 
+  ## Selection anchor of input `i` (defaults to the caret when unset — no
+  ## selection). The selection is [min(anchor,caret), max(anchor,caret)].
+  def anchor_of(i: Int) -> Int
+    match self.anchor.get(i)
+      Some(v) -> *v
+      nil -> self.caret_of(i)
+    end
+  end
+
+  ## Selection start (the lower of anchor / caret) of input `i`.
+  def sel_start_of(i: Int) -> Int
+    let a = self.anchor_of(i)
+    let c = self.caret_of(i)
+    if a < c
+      return a
+    end
+    c
+  end
+
+  ## Selection end (the higher of anchor / caret) of input `i`.
+  def sel_end_of(i: Int) -> Int
+    let a = self.anchor_of(i)
+    let c = self.caret_of(i)
+    if a > c
+      return a
+    end
+    c
+  end
+
+  ## Whether input `i` has a non-empty selection.
+  def has_selection?(i: Int) -> Bool { self.sel_end_of(i) > self.sel_start_of(i) }
+
+  ## The selected substring of input `i` ("" when the selection is empty).
+  def selected_text(i: Int) -> String
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send <= start
+      return ""
+    end
+    var out = ""
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= start && n < send
+        out = "#{out}#{c}"
+      end
+      n = n + 1
+    end
+    out
+  end
+
+  ## Select the whole value of input `i` (anchor at start, caret at end).
+  def var select_all(i: Int) -> nil
+    let len = self.input_value(i).size as Int
+    self.anchor.insert(i, 0)
+    self.caret.insert(i, len)
+    self.ui.mark_dirty(i)
+  end
+
+  ## Measured x (px) of input `i`'s caret within the field text run — the public
+  ## reader paint uses (measure seam, char-metric fallback). Relative to the text
+  ## origin (`x + pad_x`).
+  def caret_x_of(i: Int) -> Int { self.prefix_width(i, self.caret_of(i)) }
+
+  ## Programmatically place input `i`'s caret at char index `pos` (clamped to
+  ## [0, len]), collapsing any selection there. The direct, headless-testable
+  ## caret surface (the pointer/key paths drive it in real use) — handy for
+  ## positioning a caret in a multi-line textarea without computing pixels.
+  def var place_caret(i: Int, pos: Int) -> nil
+    let len = self.input_value(i).size as Int
+    var p = pos
+    if p < 0
+      p = 0
+    end
+    if p > len
+      p = len
+    end
+    self.set_caret_collapsed(i, p)
+  end
+
+  ## Public measured advance width of an arbitrary string at the slice font size
+  ## (used by paint to underline IME marked text). Measure seam / char fallback.
+  def text_width_of(s: String) -> Int { self.text_width(s.clone) }
+
+  ## The marked (IME composition) text of input `i` ("" when not composing).
+  def marked_text_of(i: Int) -> String
+    match self.mark_text.get(i)
+      Some(s) -> s.clone
+      nil -> ""
+    end
+  end
+
+  ## The 0-based line index of input `i`'s caret (number of '\n' before it).
+  def caret_line_of(i: Int) -> Int { self.line_index_of(i, self.caret_of(i)) }
+
+  ## Public line-start reader (start char index of the line containing `pos`).
+  def line_start_at(i: Int, pos: Int) -> Int { self.line_start_of(i, pos) }
+
   ## Whether checkbox `i` is checked — read LIVE from its `State[Bool]` via a
   ## single `peek` (no `set` in this frame, so the one-lock-per-frame rule is
   ## satisfied). `false` when `i` is not a checkbox.
@@ -1128,11 +1286,17 @@ class App
     end
   end
 
-  ## A CONTROL key-down event: route to the focused input for EDITING and CARET
-  ## navigation only — printable characters arrive via `text_input`, not here
-  ## (canvas's `Event.KeyDown` is control-only). Backspace/Delete edit;
-  ## Left/Right/Home/End move the caret. No-op when nothing is focused.
-  def var key_down(code: Int) -> nil
+  ## A CONTROL key-down event WITH modifier flags (F3 — docs/decisions/
+  ## text-editing.md). `shift` extends the selection (arrows/home/end keep the
+  ## anchor); `ctrl` triggers clipboard/undo shortcuts (c/x/v/z/a). Routed to the
+  ## focused input only; printable characters still arrive via `text_input`.
+  ##
+  ## canvas's `Event.KeyDown` carries NO modifiers today, so the windowed shells
+  ## pass `shift=false`/`ctrl=false` — keyboard selection-extend and ctrl-shortcuts
+  ## are reachable through THIS API (and headless tests) but dormant on a real
+  ## window until canvas adds a modifier bitmask (filed canvas gap). The plain
+  ## `key_down(code)` alias forwards here with both flags false (back-compat).
+  def var key_down_mod(code: Int, shift: Bool, ctrl: Bool) -> nil
     let i = self.focused
     if i < 0
       return
@@ -1140,18 +1304,47 @@ class App
     if !self.root.input_at(i)
       return
     end
+    if ctrl
+      self.ctrl_key(i, code)
+      return
+    end
     if code == key_backspace()
       self.backspace(i)
     elsif code == key_delete()
       self.forward_delete(i)
     elsif code == key_left()
-      self.move_caret(i, -1)
+      self.move_caret(i, -1, shift)
     elsif code == key_right()
-      self.move_caret(i, 1)
+      self.move_caret(i, 1, shift)
+    elsif code == key_up()
+      self.move_caret_line(i, -1, shift)
+    elsif code == key_down_arrow()
+      self.move_caret_line(i, 1, shift)
     elsif code == key_home()
-      self.caret_home(i)
+      self.caret_home(i, shift)
     elsif code == key_end()
-      self.caret_end(i)
+      self.caret_end(i, shift)
+    end
+  end
+
+  ## Back-compat: a modifier-less control key (the original `key_down` / `key`).
+  ## Forwards to `key_down_mod` with no shift/ctrl, so every existing call site
+  ## and pin is unchanged.
+  def var key_down(code: Int) -> nil { self.key_down_mod(code, false, false) }
+
+  ## A ctrl-shortcut on the focused input `i`: c=copy, x=cut, v=paste, z=undo,
+  ## a=select-all. (Only reachable when a shell passes ctrl=true; today test-only.)
+  def var ctrl_key(i: Int, code: Int) -> nil
+    if code == 99
+      self.copy
+    elsif code == 120
+      self.cut
+    elsif code == 118
+      self.paste
+    elsif code == 122
+      self.undo
+    elsif code == 97
+      self.select_all(i)
     end
   end
 
@@ -1167,7 +1360,97 @@ class App
     if !self.root.input_at(i)
       return
     end
+    self.push_undo(i)
+    self.clear_mark(i)
     self.insert_char(i, cp)
+  end
+
+  ## Inject the clipboard seam (F3 — mirrors set_measure / set_clock): a `get`
+  ## closure returning the system clipboard text and a `set` closure writing it.
+  ## The shell wires canvas's `Window.clipboard_text` / `set_clipboard_text`;
+  ## headless tests inject a fake (a captured String cell). Stored in 0-or-1-entry
+  ## pools + a presence flag — never `Option[any Fn]` fields.
+  ##
+  ##   app.set_clipboard({ || board.peek }, { |s| board.set_via(s) })
+  def var set_clipboard(get: any Fn[Fn() -> String], set: any Fn[Fn(String) -> nil]) -> nil
+    self.clip_get_fns = Array.new
+    self.clip_set_fns = Array.new
+    self.clip_get_fns.push(get)
+    self.clip_set_fns.push(set)
+    self.has_clipboard = true
+  end
+
+  ## Whether a clipboard seam has been injected (else copy/cut/paste are inert).
+  def clipboarded? -> Bool { self.has_clipboard }
+
+  ## Copy the focused input's selection to the clipboard (inert with no selection
+  ## or no clipboard seam). No value change.
+  def var copy -> nil
+    let i = self.focused
+    if i < 0 || !self.has_clipboard
+      return
+    end
+    let sel = self.selected_text(i)
+    if sel.size as Int == 0
+      return
+    end
+    self.clip_write(sel)
+  end
+
+  ## Cut the focused input's selection: copy it to the clipboard, then delete it
+  ## (one undo entry). Inert with no selection or no clipboard seam.
+  def var cut -> nil
+    let i = self.focused
+    if i < 0 || !self.has_clipboard
+      return
+    end
+    if !self.has_selection?(i)
+      return
+    end
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    let sel = self.selected_cached(i)
+    self.clip_write(sel)
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.delete_range(i, start, send)
+    self.set_caret_collapsed(i, start)
+  end
+
+  ## Paste the clipboard text into the focused input at the caret, replacing any
+  ## selection. Inert with no clipboard seam. Caret lands after the inserted text.
+  def var paste -> nil
+    let i = self.focused
+    if i < 0 || !self.has_clipboard
+      return
+    end
+    let text = self.clip_read
+    let n = text.size as Int
+    if n == 0
+      return
+    end
+    let start = self.sel_start_of(i)
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.replace_selection_with(i, text)
+    self.set_caret_collapsed(i, start + n)
+  end
+
+  ## An IME COMPOSITION (marked-text) update on the focused input (F3 — mirrors
+  ## canvas's `Event.TextEditing(start, len)` + `composition_text`). Stores the
+  ## uncommitted marked `text` so paint renders it inline (underlined) at the
+  ## caret; the committing `TextInput` later clears it and inserts the final char.
+  ## An empty `text` clears the mark (composition cancelled/committed). No-op when
+  ## nothing is focused. Dirties the focused input so the marked text repaints.
+  def var text_editing(start: Int, len: Int, text: String) -> nil
+    let i = self.focused
+    if i < 0 || !self.root.input_at(i)
+      return
+    end
+    self.mark_text.insert(i, text)
+    self.mark_start.insert(i, start)
+    self.mark_len.insert(i, len)
+    self.ui.mark_dirty(i)
   end
 
   ## A mouse-wheel event: scroll the innermost scrollable `list` under the last
@@ -1550,52 +1833,59 @@ class App
     end
   end
 
-  ## Insert the printable char `code` at input `i`'s caret, advancing it.
+  ## Insert the printable char `code` at input `i`'s caret. If a selection is
+  ## active, REPLACE it: delete the selected range first (one RMW), then insert at
+  ## the selection start. Collapses the selection at the new caret.
   def var insert_char(i: Int, code: Int) -> nil
-    let caret = self.caret_of(i)
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    let had_sel = send > start
     self.edit_value(i, do |cur: String|
         var out = ""
         var n = 0
         for c in cur.chars
-          if n == caret
+          if n == start
             let ch = code as Char
             out = "#{out}#{ch}"
           end
-          out = "#{out}#{c}"
+          if !(had_sel && n >= start && n < send)
+            out = "#{out}#{c}"
+          end
           n = n + 1
         end
-        if caret >= n
+        if start >= n
           let ch = code as Char
           out = "#{out}#{ch}"
         end
         out
       end)
-    self.caret.insert(i, caret + 1)
+    self.set_caret_collapsed(i, start + 1)
   end
 
-  ## Delete the char before input `i`'s caret, retreating it (no-op at start).
+  ## Delete before input `i`'s caret. With a selection: delete the whole selection
+  ## (caret to its start). Without: delete the one char before the caret.
   def var backspace(i: Int) -> nil
-    let caret = self.caret_of(i)
-    if caret <= 0
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send > start
+      self.push_undo(i)
+      self.clear_mark(i)
+      self.delete_range(i, start, send)
+      self.set_caret_collapsed(i, start)
       return
     end
-    self.edit_value(i, do |cur: String|
-        var out = ""
-        var n = 0
-        for c in cur.chars
-          if n != caret - 1
-            out = "#{out}#{c}"
-          end
-          n = n + 1
-        end
-        out
-      end)
-    self.caret.insert(i, caret - 1)
+    if start <= 0
+      return
+    end
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.delete_range(i, start - 1, start)
+    self.set_caret_collapsed(i, start - 1)
   end
 
-  ## Move input `i`'s caret by `delta` (clamped to [0, length]); dirties the
-  ## node so the caret repaints even though the value did not change.
-  def var move_caret(i: Int, delta: Int) -> nil
+  ## Move input `i`'s caret by `delta`, clamped to [0, length]. `extend` keeps the
+  ## anchor (shift-select); otherwise the selection collapses at the new caret.
+  def var move_caret(i: Int, delta: Int, extend: Bool) -> nil
     let len = self.input_value(i).size as Int
     var next = self.caret_of(i) + delta
     if next < 0
@@ -1604,41 +1894,439 @@ class App
     if next > len
       next = len
     end
-    self.caret.insert(i, next)
+    self.set_caret(i, next, extend)
+  end
+
+  ## Delete the char AT input `i`'s caret (forward delete). With a selection, delete
+  ## the selection instead (caret to its start).
+  def var forward_delete(i: Int) -> nil
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send > start
+      self.push_undo(i)
+      self.clear_mark(i)
+      self.delete_range(i, start, send)
+      self.set_caret_collapsed(i, start)
+      return
+    end
+    let len = self.input_value(i).size as Int
+    if start >= len
+      return
+    end
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.delete_range(i, start, start + 1)
     self.ui.mark_dirty(i)
   end
 
-  ## Delete the char AT input `i`'s caret (forward delete); caret stays put.
-  def var forward_delete(i: Int) -> nil
-    let caret = self.caret_of(i)
-    let len = self.input_value(i).size as Int
-    if caret >= len
-      return
+  ## Move input `i`'s caret to the start of its current line (`extend` = shift).
+  def var caret_home(i: Int, extend: Bool) -> nil
+    self.set_caret(i, self.line_start_of(i, self.caret_of(i)), extend)
+  end
+
+  ## Move input `i`'s caret to the end of its current line (`extend` = shift).
+  def var caret_end(i: Int, extend: Bool) -> nil
+    self.set_caret(i, self.line_end_of(i, self.caret_of(i)), extend)
+  end
+
+  ## Delete the [start, end) char range of input `i` via one RMW (no caret move).
+  def var delete_range(i: Int, start: Int, send: Int) -> nil { self.edit_value(i, do |cur: String|
+      var out = ""
+      var n = 0
+      for c in cur.chars
+        if n < start || n >= send
+          out = "#{out}#{c}"
+        end
+        n = n + 1
+      end
+      out
+    end) }
+
+  ## Set input `i`'s caret to `pos`. `extend` keeps the anchor (shift-select);
+  ## else collapse the selection there. Dirties the node (caret/selection repaint).
+  def var set_caret(i: Int, pos: Int, extend: Bool) -> nil
+    self.caret.insert(i, pos)
+    if !extend
+      self.anchor.insert(i, pos)
     end
+    self.ui.mark_dirty(i)
+  end
+
+  ## Set caret AND anchor to `pos` (collapse the selection) and dirty the node.
+  def var set_caret_collapsed(i: Int, pos: Int) -> nil
+    self.caret.insert(i, pos)
+    self.anchor.insert(i, pos)
+    self.ui.mark_dirty(i)
+  end
+
+  ## Replace input `i`'s current selection (or insert at the caret if none) with
+  ## `text` — one RMW. Caret positioning is the caller's job.
+  def var replace_selection_with(i: Int, text: String) -> nil
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    let had_sel = send > start
     self.edit_value(i, do |cur: String|
         var out = ""
         var n = 0
         for c in cur.chars
-          if n != caret
+          if n == start
+            out = "#{out}#{text}"
+          end
+          if !(had_sel && n >= start && n < send)
             out = "#{out}#{c}"
           end
           n = n + 1
         end
+        if start >= n
+          out = "#{out}#{text}"
+        end
         out
       end)
+  end
+
+  ## --- F3 measured-prefix caret geometry (docs/decisions/text-editing.md) ---
+  ## Measured advance width (px) of input `i`'s first `n` chars — the caret/
+  ## selection x within the field, relative to the text origin (x + pad_x). Uses
+  ## the injected measure seam (char-metric fallback when unset, so the default is
+  ## byte-identical to the old `caret * char_width` math). For a multi-line value,
+  ## the prefix is measured on the caret's own line (newlines reset the run).
+  def prefix_width(i: Int, n: Int) -> Int
+    if n <= 0
+      return 0
+    end
+    let line_start = self.line_start_of(i, n)
+    var idx = 0
+    var pre = ""
+    for c in self.input_value(i).chars
+      if idx >= line_start && idx < n
+        pre = "#{pre}#{c}"
+      end
+      idx = idx + 1
+    end
+    self.text_width(pre)
+  end
+
+  ## The char index in input `i` nearest pointer screen-x `x` — walk char prefixes
+  ## (measured) and pick the boundary closest to the click. Clamped to [0, len].
+  def char_index_at_x(i: Int, x: Int) -> Int
+    let origin = self.x_of(i) + pad_x()
+    let rel = x - origin
+    if rel <= 0
+      return 0
+    end
+    let len = self.input_value(i).size as Int
+    var n = 0
+    while n < len
+      let w_n = self.prefix_width(i, n)
+      let w_next = self.prefix_width(i, n + 1)
+      let mid = (w_n + w_next) / 2
+      if rel < mid
+        return n
+      end
+      n = n + 1
+    end
+    len
+  end
+
+  ## Extend input `i`'s selection: move the caret to the char under `x` while
+  ## keeping the anchor (a drag-select). Dirties the node.
+  def var extend_selection_to_x(i: Int, x: Int) -> nil
+    let c = self.char_index_at_x(i, x)
+    self.caret.insert(i, c)
     self.ui.mark_dirty(i)
   end
 
-  ## Move input `i`'s caret to the start.
-  def var caret_home(i: Int) -> nil
-    self.caret.insert(i, 0)
-    self.ui.mark_dirty(i)
+  ## --- F3 line navigation (single String, '\n' separators; flat caret index) ---
+  ## Index of the start of the line containing char position `pos` in input `i`
+  ## (just after the previous '\n', or 0). For a single-line input this is 0.
+  def line_start_of(i: Int, pos: Int) -> Int
+    var start = 0
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= pos
+        return start
+      end
+      if c == 10 as Char
+        start = n + 1
+      end
+      n = n + 1
+    end
+    start
   end
 
-  ## Move input `i`'s caret to the end.
-  def var caret_end(i: Int) -> nil
-    self.caret.insert(i, self.input_value(i).size as Int)
-    self.ui.mark_dirty(i)
+  ## The 0-based line index of char position `pos` in input `i` (count of '\n'
+  ## strictly before `pos`).
+  def line_index_of(i: Int, pos: Int) -> Int
+    var lines = 0
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= pos
+        return lines
+      end
+      if c == 10 as Char
+        lines = lines + 1
+      end
+      n = n + 1
+    end
+    lines
+  end
+
+  ## Index of the end of the line containing `pos` in input `i` (just before the
+  ## next '\n', or the length). For a single-line input this is the length.
+  def line_end_of(i: Int, pos: Int) -> Int
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= pos && c == 10 as Char
+        return n
+      end
+      n = n + 1
+    end
+    n
+  end
+
+  ## Move input `i`'s caret one line up (`dir` -1) or down (+1), preserving the
+  ## column (char offset within the line, clamped to the target line's length).
+  ## `extend` keeps the anchor (shift-select). For a single-line input, up/down
+  ## clamp the caret to the ends. (Measured-x column preservation is filed; v1
+  ## preserves the CHAR column — exact for monospace, close enough otherwise.)
+  def var move_caret_line(i: Int, dir: Int, extend: Bool) -> nil
+    let caret = self.caret_of(i)
+    let cur_start = self.line_start_of(i, caret)
+    let col = caret - cur_start
+    if dir < 0
+      if cur_start <= 0
+        self.set_caret(i, 0, extend)
+        return
+      end
+      let prev_start = self.line_start_of(i, cur_start - 1)
+      let prev_end = cur_start - 1
+      var target = prev_start + col
+      if target > prev_end
+        target = prev_end
+      end
+      self.set_caret(i, target, extend)
+    else
+      let cur_end = self.line_end_of(i, caret)
+      let len = self.input_value(i).size as Int
+      if cur_end >= len
+        self.set_caret(i, len, extend)
+        return
+      end
+      let next_start = cur_end + 1
+      let next_end = self.line_end_of(i, next_start)
+      var target = next_start + col
+      if target > next_end
+        target = next_end
+      end
+      self.set_caret(i, target, extend)
+    end
+  end
+
+  ## --- F3 clipboard seam internals ---
+  ## Read the injected clipboard `get` closure ("" when unset).
+  def clip_read -> String
+    if !self.has_clipboard
+      return ""
+    end
+    match self.clip_get_fns.get(0)
+      Some(f) -> f.()
+      nil -> ""
+    end
+  end
+
+  ## Write `s` through the injected clipboard `set` closure (no-op when unset).
+  def var clip_write(s: String) -> nil
+    if !self.has_clipboard
+      return
+    end
+    let sc = s.clone
+    match self.clip_set_fns.get(0)
+      Some(f) -> f.(sc)
+      nil -> nil
+    end
+  end
+
+  ## --- F3 IME marked text (composition) ---
+  ## Clear input `i`'s marked (composition) text. Called before a committing edit.
+  def var clear_mark(i: Int) -> nil
+    self.mark_text.insert(i, "")
+    self.mark_start.insert(i, 0)
+    self.mark_len.insert(i, 0)
+  end
+
+  ## --- F3 undo (per-input bounded snapshot ring) ---
+  ## Push the CURRENT (value, caret) of input `i` onto its undo stack before a
+  ## mutating edit, coalescing rapid typing into one entry by clock distance
+  ## (within `undo_group_ms` of the last push → skip, extend the existing entry).
+  ## A new edit clears the redo stack. Caps the stack at `undo_cap` entries.
+  def var push_undo(i: Int) -> nil
+    let t = self.now
+    if self.undo_coalesces?(i, t)
+      self.undo_last_time.insert(i, t)
+      return
+    end
+    self.ensure_undo_arrays(i)
+    match self.undo_vals.get(i)
+      Some(a) -> a.push(self.value_cached(i))
+      nil -> nil
+    end
+    match self.undo_carets.get(i)
+      Some(a) -> a.push(self.caret_of(i))
+      nil -> nil
+    end
+    self.clear_redo(i)
+    self.undo_last_time.insert(i, t)
+  end
+
+  ## The CACHED value string of input `i` (the last-flushed reactive value, read
+  ## from `self.cache` — NO Mutex lock). Used by undo-snapshot + selection reads
+  ## that happen in the SAME frame as a value `update`/`set`: a live `peek` would
+  ## hold a second lock on the same handle across the frame and corrupt the value
+  ## (the one-lock-per-frame landmine). The cache equals the live value at the
+  ## start of each event frame (every edit flushes before the next), so this is
+  ## the sound snapshot source for an in-frame mutation.
+  def value_cached(i: Int) -> String { self.text_of(i) }
+
+  ## The selected substring read from the CACHE (no lock) — for `cut`, which reads
+  ## the selection then deletes it (an update) in one frame.
+  def selected_cached(i: Int) -> String
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send <= start
+      return ""
+    end
+    var out = ""
+    var n = 0
+    for c in self.value_cached(i).chars
+      if n >= start && n < send
+        out = "#{out}#{c}"
+      end
+      n = n + 1
+    end
+    out
+  end
+
+  ## Whether a fresh push for input `i` at time `t` should coalesce into the last
+  ## undo entry (rapid typing): there is an entry AND it was pushed within
+  ## `undo_group_ms`.
+  def undo_coalesces?(i: Int, t: Int) -> Bool
+    let depth = self.undo_depth(i)
+    if depth <= 0
+      return false
+    end
+    match self.undo_last_time.get(i)
+      Some(last) -> t - *last < undo_group_ms() && t - *last >= 0
+      nil -> false
+    end
+  end
+
+  ## Number of undo snapshots stored for input `i`.
+  def undo_depth(i: Int) -> Int
+    match self.undo_vals.get(i)
+      Some(a) -> a.size as Int
+      nil -> 0
+    end
+  end
+
+  ## Ensure input `i`'s undo arrays exist (lazily created on first push).
+  def var ensure_undo_arrays(i: Int) -> nil
+    if !self.undo_vals.key?(i)
+      let nv: Array[String] = Array.new
+      self.undo_vals.insert(i, nv)
+      let nc: Array[Int] = Array.new
+      self.undo_carets.insert(i, nc)
+    end
+  end
+
+  ## Drop input `i`'s redo stack (a fresh edit invalidates redo).
+  def var clear_redo(i: Int) -> nil
+    let nv: Array[String] = Array.new
+    self.redo_vals.insert(i, nv)
+    let nc: Array[Int] = Array.new
+    self.redo_carets.insert(i, nc)
+  end
+
+  public
+
+  ## Undo the last edit on the focused input: restore its previous (value, caret)
+  ## snapshot (pushing the current state onto the redo stack). No-op when nothing
+  ## is focused or the undo stack is empty.
+  def var undo -> nil
+    let i = self.focused
+    if i < 0 || !self.root.input_at(i)
+      return
+    end
+    let depth = self.undo_depth(i)
+    if depth <= 0
+      return
+    end
+    self.push_redo(i)
+    let prev_val = self.undo_pop_val(i)
+    let prev_caret = self.undo_pop_caret(i)
+    self.set_input_value(i, prev_val)
+    self.set_caret_collapsed(i, prev_caret)
+    self.undo_last_time.insert(i, 0 - undo_group_ms())
+  end
+
+  private
+
+  ## Push the current (value, caret) of input `i` onto its redo stack.
+  def var push_redo(i: Int) -> nil
+    self.ensure_redo_arrays(i)
+    match self.redo_vals.get(i)
+      Some(a) -> a.push(self.value_cached(i))
+      nil -> nil
+    end
+    match self.redo_carets.get(i)
+      Some(a) -> a.push(self.caret_of(i))
+      nil -> nil
+    end
+  end
+
+  ## Ensure input `i`'s redo arrays exist.
+  def var ensure_redo_arrays(i: Int) -> nil
+    if !self.redo_vals.key?(i)
+      let nv: Array[String] = Array.new
+      self.redo_vals.insert(i, nv)
+      let nc: Array[Int] = Array.new
+      self.redo_carets.insert(i, nc)
+    end
+  end
+
+  ## Pop + return the last undo value of input `i` ("" if empty).
+  def var undo_pop_val(i: Int) -> String
+    match self.undo_vals.get(i)
+      Some(a) -> match a.pop
+        Some(s) -> s.clone
+        nil -> ""
+      end
+      nil -> ""
+    end
+  end
+
+  ## Pop + return the last undo caret of input `i` (0 if empty).
+  def var undo_pop_caret(i: Int) -> Int
+    match self.undo_carets.get(i)
+      Some(a) -> match a.pop
+        Some(v) -> *v
+        nil -> 0
+      end
+      nil -> 0
+    end
+  end
+
+  ## Write input `i`'s value directly to `v` through a single `State.set` (one
+  ## lock; the value is computed without a read, so no peek+set pair).
+  def var set_input_value(i: Int, v: String) -> nil
+    let idx = self.root.value_index_at(i)
+    if idx < 0
+      return
+    end
+    let vc = v.clone
+    match self.root.values.get(idx)
+      Some(s) -> s.set(&var self.ui, vc)
+      nil -> nil
+    end
   end
 
   public

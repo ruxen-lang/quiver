@@ -430,7 +430,73 @@ The value `State[String]` is held in a per-`Col` value pool
 `computes`. **Edits go through a single `State.update(ui, { |cur| … })`** — a
 `peek`-then-`set` pair on one handle would hold two Mutex locks across the frame
 and corrupt the value (the "one lock per frame" landmine; see CLAUDE.md).
-Pinned by `tests/input.rx`. Selection, clipboard, and multiline are deferred.
+Pinned by `tests/input.rx`.
+
+### F3: production text editing — selection, clipboard, IME, textarea, undo
+
+The single-line `input` grew a full editing surface (F3 —
+`docs/decisions/text-editing.md`). All of it is **App-level runtime state** (like
+caret/scroll/capture) reached through App entry points or **injected seams**;
+quiver stays canvas-free. Every piece is default-inert — a plain `input` with no
+selection / no marked text / no clipboard seam is byte-identical to the old one.
+
+- **Selection (anchor + caret).** Each input has an `anchor` alongside its
+  `caret`; the selection is `[min, max]` of the two (empty when equal). A pointer
+  press sets `anchor = caret =` the char under x (from **measured prefixes**) and
+  begins a **caret drag** (reuses the `captured` drag primitive, generalised from
+  sliders); `pointer_move` extends the selection, `pointer_up` ends the drag.
+  Readers: `anchor_of` / `sel_start_of` / `sel_end_of` / `has_selection?` /
+  `selected_text` / `select_all` / `place_caret`. Caret/selection x come from
+  `prefix_width` (the measure seam; char-metric fallback — so the default caret
+  position is unchanged).
+
+- **Modifier-aware keys.** `key_down_mod(code, shift, ctrl)` is the new entry:
+  `shift` extends the selection (arrows/home/end keep the anchor), `ctrl` runs
+  clipboard/undo shortcuts (c/x/v/z, a = select-all). **`key_down(code)` (and the
+  `key` alias) now forward to `key_down_mod(code, false, false)`** — back-compat,
+  every existing caller and pin unchanged. canvas's `Event.KeyDown` carries no
+  modifiers yet (filed gap), so the windowed shells pass `false`/`false`; keyboard
+  selection-extend + ctrl-shortcuts are reachable through this API and headless
+  tests, dormant on a real window until canvas adds a modifier bitmask.
+
+- **Clipboard seam.** `set_clipboard(get, set)` injects two closures (the
+  measure/clock 0-or-1-pool pattern). `copy` / `cut` / `paste` operate on the
+  focused input's selection (single-lock RMW). The shell wires canvas's
+  `Window.clipboard_text` / `set_clipboard_text`; headless tests inject a
+  **`ClipboardCell`** (a shared `Send` String cell — the headless clipboard
+  backend, like `RecordingSurface` is the headless paint backend; a bare
+  `Mutex[String]` corrupts through a closure on this ruxen build). With no seam,
+  copy/cut/paste are inert. `clipboarded?` reports the state.
+
+- **IME composition.** `text_editing(start, len, text)` stores the focused input's
+  **marked (uncommitted) text**; paint renders it inline at the caret with a thin
+  underline rect (no new op). The committing `TextInput` clears the mark and
+  inserts the final char — quiver mirrors how canvas/SDL sequences
+  `Event.TextEditing` + `composition_text` → committed `TextInput`. Reader:
+  `marked_text_of`.
+
+- **Multi-line `textarea`.** `root.textarea(state, width, rows)` is a multi-line
+  input: one `State[String]` with `\n` separators (no recursive line types — the
+  caret is a **flat char index**; `App` scans newlines for line nav). The box is
+  `rows * row_height` tall. Up/down move the caret across lines preserving the
+  char column (clamped to the target line); home/end act on the caret's **line**,
+  not the whole buffer. Reuses all the single-line machinery (focus/selection/
+  clipboard/undo/IME). Paint draws each line on its own row + the caret at its
+  line/column. (Measured-x column preservation, multi-line selection rects across
+  lines, soft wrap, and internal scroll are deferred — filed.)
+
+- **Undo.** Per-input bounded snapshot ring of `(value, caret)`; a snapshot is
+  pushed before each mutating edit, with **clock-distance coalescing** (rapid
+  typing within `undo_group_ms` of the previous edit folds into one entry — the
+  clock seam again, so headless tests bump the injected clock to model a pause).
+  `undo` restores the exact prior `(value, caret)`. A redo stack is kept (a fresh
+  edit clears it).
+
+Pinned by `tests/text_editing.rx` (20). The single-line `input` /
+`caret_edit.rx` pins stay green unchanged (a collapsed selection = caret-only =
+old behaviour). **Deferred (filed):** real keyboard modifiers (canvas gap),
+multi-line selection rects, measured-x column on up/down, soft wrap, textarea
+internal scroll, word-granularity moves, double-click word select.
 
 ### `Checkbox`
 
