@@ -129,10 +129,17 @@ end
 ## The save bar: a `button` whose handler bumps a `saves` counter, plus a
 ## reactive read-out of how many times Save was pressed. Demonstrates a plain
 ## button + handler + targeted repaint of the count.
+##
+## F1 SHOWCASE (docs/LAYOUT.md): instead of a bare `row` (children flush against
+## each other) the bar is a `row_styled` with `gap(12)` between the button and
+## the read-out and `align(align_center())` so the two children sit centered on
+## the cross axis — the layout knobs replace any hand-inserted spacer. `gap` is
+## the idiomatic spacing primitive; `align` controls cross-axis placement.
 def save_bar(root: &var Col, saves: &State[Int]) -> nil
   let sv_click = *saves      # captured by the button handler
   let sv_read = *saves       # captured by the read-out closure
-  root.row do |c: &var Col|
+  let bar = Style.new.gap(12).align(align_center())
+  root.row_styled(bar) do |c: &var Col|
     c.button("Save", { |ui| sv_click.update(ui, { |v| v + 1 }) })
     c.dyn_text({ |ui| "saved #{sv_read.get(ui)}×" })
   end

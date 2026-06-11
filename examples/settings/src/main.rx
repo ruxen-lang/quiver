@@ -156,8 +156,14 @@ def run_windowed(win: &var Window, app: &var App) -> nil
       end
       nil -> nil
     end
+    # Per-frame gesture step: advance the (frame-counter) clock, step any active
+    # fling, fire a due long-press. We don't inject a real clock — canvas's clock
+    # binding is landing separately — so the default deterministic counter drives
+    # momentum at one step per loop iteration. Repaint if tick OR flush changed
+    # anything.
+    let stepped = app.tick
     let dirty = app.flush
-    if (dirty.size as Int) > 0
+    if stepped || (dirty.size as Int) > 0
       paint_frame(win, app)
     end
     win.sleep_ms(16)

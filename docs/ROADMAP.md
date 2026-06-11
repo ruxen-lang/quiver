@@ -121,7 +121,7 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       z-order = build order, paint bottom→top, hit-test reverse (topmost wins).
       Pinned by `tests/stack.rx`.
 
-**F2 — gestures & real scrolling:** (in progress — see below)
+**F2 — gestures & real scrolling:** (complete)
 
 - [x] **Pixel-based scrolling** — `scroll(dx, dy)` moves `scroll_line` px/click
       (default `row_height`; `set_scroll_line` overrides). App boundary stays Int.
@@ -143,9 +143,22 @@ marks a cross-repo dependency (see `../ruxen/docs/TASKS.md`).
       on an axis-tagged offset; the vertical path is byte-identical. Pinned by
       `tests/hlist.rx`.
 
-**Deferred (explicit — do NOT implement this phase):** wrap, virtualization,
-keyed diffing / row reuse, scroll animation/fades, double-tap, `shrink` /
-overflow-shrink, leaf-level `grow`, sub-click Float wheel precision.
+**Showcase:** `examples/settings`' save bar uses the F1 `Style` knobs
+(`gap(12)` + `align(align_center())`) so the tutorial app teaches the new
+layout. The windowed loop calls `app.tick` each frame to drive fling/long-press.
+
+**Deferred (explicit — filed, NOT implemented this phase; each additive on the
+same pass + seams, none reopens the own-flex-vs-Yoga decision):**
+
+- [ ] Flex wrap (multi-line rows/cols)
+- [ ] `shrink` / overflow-shrink (v1 never shrinks below intrinsic)
+- [ ] Leaf-level `grow` (today: wrap a leaf in a 1-child styled container)
+- [ ] List virtualization (only build/paint visible rows)
+- [ ] Keyed diffing / row reuse for `list_of`
+- [ ] Scroll animation / scrollbar fade
+- [ ] Double-tap recognizer
+- [ ] Sub-click Float32 wheel precision (needs the Float seam)
+- [ ] Stack z-index reordering distinct from build order; clip-to-stack
 
 ### Foundation (unblocks the whole widget library — do first)
 
