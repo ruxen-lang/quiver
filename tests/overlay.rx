@@ -1,0 +1,66 @@
+# Pins the OVERLAY/POPUP primitive on App (docs/DSL.md, "Overlay / popup
+# primitive") as a reusable framework primitive in its own right — select.rx
+# exercises it through the dropdown, this file pins the primitive's documented
+# contract directly: open/close/owner/anchor, re-open replaces the owner, and
+# the two behavioural rules (paint-on-top, hit-first-then-dismiss). Headless.
+Tester.describe("overlay primitive — open / close / owner / anchor") do |t: &var Tester|
+  # A plain tree with a button (node 1) under a header (node 0). The button is
+  # an ordinary handler node, so we can prove "a click outside the overlay is
+  # consumed and does NOT reach the button below it".
+  let app_with = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let hits = ui.state(0)
+      root.text("header")                                         # node 0
+      root.button("act", { |ui2| hits.update(ui2, { |v| v + 1 }) }) # node 1
+      root.dyn_text({ |ui2| "hits=#{hits.get(ui2)}" })            # node 2
+    })
+  }
+
+  t.it("nothing is open at first") do
+    var app = app_with.()
+    t.expect(app.overlay_open?).to_eq(false)
+    t.expect(app.overlay_owner).to_eq(-1)
+  end
+
+  t.it("open_overlay records owner + anchor; close clears them") do
+    var app = app_with.()
+    app.open_overlay(1, 40, 60)
+    t.expect(app.overlay_open?).to_eq(true)
+    t.expect(app.overlay_owner).to_eq(1)
+    t.expect(app.overlay_x).to_eq(40)
+    t.expect(app.overlay_y).to_eq(60)
+    app.close_overlay
+    t.expect(app.overlay_open?).to_eq(false)
+    t.expect(app.overlay_owner).to_eq(-1)
+  end
+
+  t.it("opening a second overlay replaces the owner and the anchor") do
+    var app = app_with.()
+    app.open_overlay(0, 10, 10)
+    app.open_overlay(2, 70, 90)        # one overlay at a time — last wins
+    t.expect(app.overlay_owner).to_eq(2)
+    t.expect(app.overlay_x).to_eq(70)
+    t.expect(app.overlay_y).to_eq(90)
+  end
+
+  t.it("while open, a click is consumed and does NOT reach the content below") do
+    var app = app_with.()
+    # the button (node 1) sits at y = row_height; clicking there would normally
+    # fire its handler. With an overlay open, the click must be consumed.
+    app.open_overlay(0, 0, 0)
+    let hit = app.pointer_down(2, row_height() + 2)
+    app.flush
+    # the click was consumed by the overlay (it dismisses), the button did NOT
+    # fire — hits stays 0.
+    t.expect(app.text_of(2)).to_eq("hits=0")
+    # and the overlay closed as a result of the outside click.
+    t.expect(app.overlay_open?).to_eq(false)
+  end
+
+  t.it("a normal click (no overlay) DOES reach the button — control case") do
+    var app = app_with.()
+    app.pointer_down(2, row_height() + 2)   # button hit, fires
+    app.flush
+    t.expect(app.text_of(2)).to_eq("hits=1")
+  end
+end

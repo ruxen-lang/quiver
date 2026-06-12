@@ -10,9 +10,9 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
 
   t.it("mount computes reactive text and leaves static text alone") do
     var app = counter_app.()
-    t.expect(app.text_of(0)).to_eq(String.from("Counter"))
-    t.expect(app.text_of(1)).to_eq(String.from("count: 0"))
-    t.expect(app.text_of(2)).to_eq(String.from("tap"))
+    t.expect(app.text_of(0)).to_eq("Counter")
+    t.expect(app.text_of(1)).to_eq("count: 0")
+    t.expect(app.text_of(2)).to_eq("tap")
   end
 
   t.it("click runs the handler; flush refreshes ONLY the subscribed node") do
@@ -21,8 +21,8 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
     let refreshed = app.flush
     t.expect(refreshed.size as Int).to_eq(1)
     ArrayMatcher.new(&refreshed).to_include(1)
-    t.expect(app.text_of(1)).to_eq(String.from("count: 1"))
-    t.expect(app.text_of(0)).to_eq(String.from("Counter"))
+    t.expect(app.text_of(1)).to_eq("count: 1")
+    t.expect(app.text_of(0)).to_eq("Counter")
   end
 
   t.it("pin: the static/reactive boundary — static nodes NEVER re-run") do
@@ -33,7 +33,7 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
     # only node 1 (the dyn_text tracking scope) is ever refreshed
     t.expect(refreshed.size as Int).to_eq(1)
     ArrayMatcher.new(&refreshed).to_include(1)
-    t.expect(app.text_of(1)).to_eq(String.from("count: 2"))
+    t.expect(app.text_of(1)).to_eq("count: 2")
   end
 
   t.it("flush with nothing dirty refreshes nothing") do
@@ -52,7 +52,7 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
     app.click(1)
     let refreshed = app.flush
     t.expect(refreshed.size as Int).to_eq(0)
-    t.expect(app.text_of(0)).to_eq(String.from("shown: 1"))
+    t.expect(app.text_of(0)).to_eq("shown: 1")
   end
 
   t.it("two dyn_text nodes on one state both refresh and repaint") do
@@ -65,8 +65,8 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
     app.click(2)
     let refreshed = app.flush
     t.expect(refreshed.size as Int).to_eq(2)
-    t.expect(app.text_of(0)).to_eq(String.from("a: 1"))
-    t.expect(app.text_of(1)).to_eq(String.from("b: 1"))
+    t.expect(app.text_of(0)).to_eq("a: 1")
+    t.expect(app.text_of(1)).to_eq("b: 1")
   end
 
   t.it("re-run drops stale subscriptions from conditional reads") do
@@ -86,15 +86,15 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
       root.button("flip", { |ui2: &var Ui| flag.set(ui2, 0) })
       root.button("poke a", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
     })
-    t.expect(app.text_of(0)).to_eq(String.from("a=10"))
+    t.expect(app.text_of(0)).to_eq("a=10")
     # flip: the scope re-runs and now reads flag+b, NOT a
     app.click(1)
     app.flush
-    t.expect(app.text_of(0)).to_eq(String.from("b=20"))
+    t.expect(app.text_of(0)).to_eq("b=20")
     # poking a must no longer dirty the scope
     app.click(2)
     t.expect(app.flush.size as Int).to_eq(0)
-    t.expect(app.text_of(0)).to_eq(String.from("b=20"))
+    t.expect(app.text_of(0)).to_eq("b=20")
   end
 
   t.it("layout stacks rows top to bottom") do
@@ -130,7 +130,7 @@ Tester.describe("App — mount, targeted refresh, dispatch, layout") do |t: &var
     t.expect(hit).to_eq(2)
     let refreshed = app.flush
     t.expect(refreshed.size as Int).to_eq(1)
-    t.expect(app.text_of(1)).to_eq(String.from("count: 1"))
+    t.expect(app.text_of(1)).to_eq("count: 1")
   end
 
   t.it("pointer_down outside any button is a no-op") do

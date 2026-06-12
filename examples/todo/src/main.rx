@@ -1,0 +1,252 @@
+## todo — a dynamic list app proving STRUCTURAL reactivity in quiver.
+##
+## Unlike the settings panel (reactive *values* over a fixed layout), this app
+## grows and shrinks its UI: an "Add" button appends a row, "Clear done" removes
+## rows. The list is a `list_of` bound to a shared `ListModel`; mutating the
+## model rebuilds just that list's child subtree on the next flush. See
+## docs/decisions/structural-reactivity.md.
+##
+## Binary package: the canvas-facing shell (window + event loop + paint replay)
+## lives here; quiver stays platform-free. Windowed when a display exists,
+## synthetic-event headless fallback otherwise (CI-safe).
+
+## Build the app. The `ListModel` is created once and used twice — first
+## CAPTURED by the button handlers (a closure capture is a non-consuming
+## pointer-copy), then passed by value to `list_of`. Every mutation bumps the
+## model's version (single-lock RMW) → the list_of node goes dirty → flush
+## rebuilds its rows from the current items.
+def build_app -> App
+  App.build({ |ui: &var Ui, root: &var Col|
+    let todos = ui.list_model
+
+    root.text("Todo")                                              # 0 static
+
+    # Two action buttons. Their handlers capture `todos` (non-consuming) and
+    # mutate it; the row text reflects done state via the model. `row` is an
+    # immediately-invoked container builder → `do…end` (structure). The button
+    # HANDLERS stay `{ |u| … }` braces (stored behaviour).
+    root.row do |c: &var Col|
+      c.button("Add", { |u| todos.add(u, "new task") })   # append a row
+      c.button("Toggle 0", { |u| todos.toggle(u, 0) })    # flip first
+      c.button("Del 0", { |u| todos.remove(u, 0) })       # drop first
+    end
+
+    # The reactive list: one row per item, scrolling within a fixed viewport.
+    # `list_of`'s item builder is STORED (re-run on every rebuild), so it stays a
+    # `{ |c, m, i| … }` brace closure — not a `do…end` block. See docs/DSL.md.
+    root.list_of(todos, row_height() * 6, { |c, m, i|
+      c.text("#{m.row_text(i)}")
+    })
+  })
+end
+
+def main
+  puts "quiver todo — dynamic list (structural reactivity)"
+  let w = 280
+  let h = 240
+  match Window.open("Todo", w, h)
+    Ok(win) -> drive(win)
+    Err(e)  -> puts "cannot create canvas: #{e}"
+  end
+end
+
+def drive(win0: Window) -> nil
+  var win = win0
+  var app = build_app
+
+  let shown = match win.show_gpu_scaled(2)
+    Ok(_)  -> true
+    Err(e) -> announce_headless(e)
+  end
+
+  if !shown
+    var surface = RecordingSurface.new
+    run_headless(&var app, &var surface)
+    return
+  end
+
+  run_windowed(&var win, &var app)
+end
+
+## Headless demo: drive the list structurally and show the rows after each step.
+def run_headless(app: &var App, surface: &var RecordingSurface) -> nil
+  let list = find_kind(app, kind_list_of(), 0)
+  let add = find_kind(app, kind_button(), 0)
+  let tog = find_kind(app, kind_button(), 1)
+  let del = find_kind(app, kind_button(), 2)
+
+  puts ""
+  puts "click Add ×3 (the list grows three rows):"
+  click(app, add)
+  click(app, add)
+  click(app, add)
+  dump_rows(app, list)
+
+  puts ""
+  puts "click Toggle 0 (first row's done flag flips):"
+  click(app, tog)
+  dump_rows(app, list)
+
+  puts ""
+  puts "click Del 0 (first row removed; the list shrinks):"
+  click(app, del)
+  dump_rows(app, list)
+
+  puts ""
+  puts "first frame paint = #{frame_count(app, surface)} draw commands"
+  puts "done (headless). The same App drives the windowed path identically."
+end
+
+def run_windowed(win: &var Window, app: &var App) -> nil
+  # Inject real text metrics through quiver's measure seam (the binary is the
+  # only place quiver L2 + canvas L1 symbols meet; quiver itself stays canvas-
+  # free). Plain capture of `win` (non-Copy class — not `move`) is sound today;
+  # the closure returns canvas's true advance width at quiver's slice font size.
+  # The headless path (run_headless) never injects, so it keeps char metrics.
+  app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
+
+  paint_frame(win, app)
+
+  var running = true
+  while running
+    match win.poll_event
+      Some(ev) -> match ev
+        # canvas delivers Float32 sub-pixel coords; quiver's design space is
+        # whole Ints, so the shell quantizes at this seam (the one cast site).
+        Event.PointerDown(x, y) -> app.pointer_down(x as Int, y as Int)
+        Event.PointerMove(x, y) -> app.pointer_move(x as Int, y as Int)
+        Event.PointerUp(x, y)   -> app.pointer_up(x as Int, y as Int)
+        Event.TextInput(cp)     -> app.text_input(cp)   # printable chars insert here
+        Event.KeyDown(k)        -> app.key_down(k)        # control-only: edit / caret
+        Event.Scroll(dx, dy)    -> app.scroll(dx as Int, dy as Int)   # wheel → scroll the hovered list
+        Event.Resize(ww, hh)    -> app.resize(ww as Int, hh as Int)
+        Event.CloseRequested    -> running = false
+        _                       -> nil
+      end
+      nil -> nil
+    end
+    let dirty = app.flush
+    if (dirty.size as Int) > 0
+      paint_frame(win, app)
+    end
+    win.sleep_ms(16)
+  end
+  win.hide
+end
+
+## Click node `i` (pointer down at its top-left) then flush.
+def click(app: &var App, i: Int) -> nil
+  if i >= 0
+    app.pointer_down(app.x_of(i) + 2, app.y_of(i) + 2)
+    let _ = app.flush
+  end
+end
+
+## Print the current rows of the reactive list `list`.
+def dump_rows(app: &var App, list: Int) -> nil
+  var c = app.root.first_child_of(list)
+  while c >= 0
+    puts "  #{app.text_of(c)}"
+    c = app.root.next_sibling_of(c)
+  end
+end
+
+## Full-repaint a frame; return the number of draw commands recorded.
+def frame_count(app: &var App, surface: &var RecordingSurface) -> Int
+  surface.reset
+  paint_all(app, surface)
+  surface.size
+end
+
+## Find the `nth` (0-based) node of a given kind in build order, or -1.
+def find_kind(app: &var App, kind: Int, nth: Int) -> Int
+  var i = 0
+  var seen = 0
+  let n = app.root.size
+  while i < n
+    if app.root.kind_at(i) == kind
+      if seen == nth
+        return i
+      end
+      seen = seen + 1
+    end
+    i = i + 1
+  end
+  -1
+end
+
+## SkiaPaint — this binary's DIRECT `PaintSurface` implementor (ruxen Q17). quiver's
+## generic paint pass (`paint_all`) monomorphizes against it and calls these methods
+## as it visits each node, issuing canvas/Skia draws on the spot — no recorded mirror,
+## one walk. Holds a borrow of the live `Canvas` for the frame (constructed inside the
+## begin/end bracket in `paint_frame`). Each method is the op→canvas mapping that used
+## to live in `replay`, transliterated 1:1. See docs/decisions/direct-paint-backend.md.
+class SkiaPaint
+  include PaintSurface
+  canvas: &var Canvas
+
+  def init(canvas: &var Canvas)
+    self.canvas = canvas
+  end
+
+  def var fill_clear(r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let _ = self.canvas.clear(col)
+  end
+
+  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_rect(rect, col)
+  end
+
+  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let label = text.clone
+    let _ = self.canvas.draw_text(label, x as Float32, y as Float32, col)
+  end
+
+  def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_round_rect(rect, radius as Float32, col)
+  end
+
+  def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.stroke_round_rect(rect, radius as Float32, width as Float32, col)
+  end
+
+  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+    let _ = self.canvas.save
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.clip_rect(rect)
+  end
+
+  def var push_translate(dx: Int, dy: Int) -> nil
+    let _ = self.canvas.translate(dx as Float32, dy as Float32)
+  end
+
+  def var pop_state -> nil
+    let _ = self.canvas.restore
+  end
+end
+
+## Paint one frame DIRECTLY to the OS window: open a frame, drive quiver's paint
+## pass through `SkiaPaint` (which issues the Skia calls as it walks), end + present.
+def paint_frame(win: &var Window, app: &var App) -> nil
+  match win.canvas.begin_frame
+    Ok(_)  -> nil
+    Err(e) -> puts "begin_frame: #{e}"
+  end
+  var skia = SkiaPaint.new(&var win.canvas)
+  paint_all(app, &var skia)
+  let _ = win.canvas.end_frame
+  let _ = win.present
+end
+
+def announce_headless(e: String) -> Bool
+  puts "(no OS window: #{e}) — running headless"
+  false
+end

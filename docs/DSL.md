@@ -17,13 +17,26 @@ tree; reactivity granularity comes from which builder method you call.
 ```ruxen
 var app = App.build({ |ui: &var Ui, root: &var Col|
   let count = ui.state(0)
-  root.text("Counter")                                          # static
-  root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })  # reactive
-  root.button("tap", { |ui2: &var Ui|                           # handler
+  root.text("Counter")                              # static
+  root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })  # reactive
+  root.button("tap", { |ui2|                        # handler
     count.update(ui2, { |c| c + 1 })
   })
 })
 ```
+
+The **outer `App.build` block keeps its param types** (`{ |ui: &var Ui, root:
+&var Col| … }`) — that one block is the app's entry point and its types are not
+inferred today (a ruxen inference gap; see `docs/decisions/dsl-ergonomics.md`).
+`App.build` stays an explicit-closure param (a `{ … }` literal), NOT a
+`&block`/`yield` builder, because its block takes two `&var` references and a
+two-`&var`-arg `yield` miscompiles on the v1 toolchain (CLAUDE.md, ruxen Q36).
+
+**Stored inner closures drop their types** — `{ |ui2| … }`, `{ |c| … }` — because
+ruxen infers a stored-closure param's type from the builder method's signature.
+But **immediately-invoked container blocks MUST type their param** (`row do |c:
+&var Col| … end`): a `&block` param's type does not infer through the
+`yield` seam (an untyped `do |c| … end` leaves `c` as `?T`). See the next section.
 
 - `App.build` runs the block **once**; `root` is the column under
   construction (a flat arena of nodes — see below).
@@ -41,10 +54,9 @@ Prototyping against ruxen v1 forced three changes, each pinned by a probe:
 
 1. **`text` vs `dyn_text` are separate methods.** Overloading one name on
    `&str` vs closure miscompiles (heap corruption) in ruxen v1.
-2. **Stored closures use `{ … }` braces, not `do … end`.** `do…end` blocks
-   passed to *free functions* with explicit closure parameters segfault;
-   methods accept them, but braces work everywhere and we use them
-   uniformly for stored callbacks.
+2. **Container builders take a `do…end` block; stored callbacks stay `{ … }`
+   braces.** See "Blocks & the do/brace idiom" below — this is now the house
+   style, not a workaround.
 3. **The tree is a flat arena** (parallel arrays in `Col`, node id = index),
    not a recursive `Widget` class: recursive class types crash the v1
    compiler, and `Option[any Fn]` fields miscompile. `-1` sentinels in
@@ -52,6 +64,664 @@ Prototyping against ruxen v1 forced three changes, each pinned by a probe:
 
 None of these changes the model — build once, `dyn_text` closures are the
 only things that ever re-run.
+
+## Blocks & the do/brace idiom
+
+quiver's DSL uses Ruxen's Ruby-block features (`&block` / `yield` /
+`block_defined?` / `alias` — see the ruxen tutorial
+`../ruxen/docs/tutorial/09-closures-and-blocks.md` and the ADRs
+`../ruxen/docs/decisions/{ruby-block-semantics,alias-keyword}.md`). The house
+rule is a single visual distinction:
+
+| Form | Means | Used for |
+|---|---|---|
+| `do …  end` | an **immediately-invoked** block (declared `&block`, run once via `yield`) — STRUCTURE | container builders: `row`, `col`, `list`, `row_styled`, `col_styled` |
+| `{ \|x\| … }` | a **stored** closure value — BEHAVIOUR kept and re-run later | `dyn_text`, `button` handlers, `set_measure`, `list_of`'s item builder, `State.update` |
+
+```ruxen
+root.row do |c: &var Col|                 # structure — immediately invoked
+  c.text("Name:")
+  c.button("Save", { |ui| saves.update(ui, { |v| v + 1 }) })  # stored handler
+end
+```
+
+### Which builders are `&block`/`yield`, and which stay stored closures
+
+- **`&block` + `yield` (immediately invoked, run ONCE during build):** `row`,
+  `col`, `list`, `row_styled`, `col_styled`. Each declares `&block: Fn[(&var Col)
+  -> nil]` and `yield(&var *self)` while its cursor is on the new container, then
+  restores the cursor. The block never outlives the build call, so a declared
+  block (not a stored closure) is exactly right.
+- **Stored closure params (kept and re-invoked later) — NOT `&block`:**
+  - `dyn_text` / `button` — their closures are stored in the `computes` /
+    `handlers` pools and re-run on every flush / click.
+  - `list_of`'s `item_builder` — stored in `item_builders` and re-invoked on
+    EVERY rebuild (each model mutation). A `&block` slot is for yield-time use;
+    storing a block is a different lifetime story, so this stays `{ |c, m, i| …
+    }`.
+  - `set_measure`'s measure fn — stored in a 0-or-1-entry pool.
+  - `App.build`'s entry block — an explicit closure param (two-`&var`-arg
+    `yield` miscompiles; ruxen Q36).
+
+### Two constraints the toolchain imposes
+
+1. **Type the block param.** `row do |c: &var Col| … end`, never `do |c| … end`
+   — a `&block` param's type does not infer through the `yield` seam (untyped ⇒
+   `c: ?T` ⇒ `no runtime symbol for ?T::text` at codegen). Typed works in both
+   `do…end` and `{ }` forms.
+2. **Blockless calls need parens.** `list`'s block is optional (below); call it
+   `root.list(h)` (with parens) when omitting the block — a paren-less blockless
+   method call doesn't fill the block slot in Tier 1.
+
+### Optional blocks: `list` without a block (`block_defined?`)
+
+`list`'s builder block is **optional**. `root.list(h)` with no block builds an
+empty scrollable region — a reserved fixed-height viewport whose rows arrive
+later — instead of erroring; `root.list(h) do |c: &var Col| … end` fills it. This
+is the one optional-block API in the DSL (it guards `yield` behind
+`block_defined?`). Pinned by `tests/list.rx`.
+
+### `alias` — Ruby synonyms, zero extra codegen
+
+`alias new old` binds a second NAME to the SAME method body (one symbol, no
+delegating thunk). quiver's genuine synonyms:
+
+| Type | Alias | Of |
+|---|---|---|
+| `Col` | `length` | `size` |
+| `ListModel` | `size`, `length` | `count` |
+| `App` | `type_char` | `text_input` |
+| `App` | `key` | `key_down` |
+
+`App.type_char` / `App.key` were hand-written delegating methods before — now
+true aliases. (Operator-spelled aliases like `alias << push` are staged in ruxen
+— E1123 — so quiver does not use them.)
+
+### String literals are `String` — never `String.from` on a literal
+
+A bare `"x"` (and interpolated `"x #{y}"`) IS a `String` in every position
+(method args, fields, `push`, `Err("…")`, `to_eq`). Write the literal directly.
+`String.from(...)` is kept ONLY to convert a `&str` **variable** to `String` (a
+real runtime operation, e.g. `String.from(label)` where `label: &str` is pushed
+into an `Array[String]`).
+
+## Containers: `row` / `col` and arena nesting
+
+A node can own children. The arena stays flat (no recursive type, per the
+landmines): `Col` carries tree-link hashes `parent` / `child_first` /
+`child_last` / `child_next` (node-id → node-id; absent ⇒ `-1`), a top-level
+root chain (`root_first`/`root_last`), and a build cursor `parent_cursor`.
+Node ids remain build-order indices — the "ids ARE node ids" invariant holds.
+
+```ruxen
+root.text("title")              # node 0, a top-level (root) leaf
+root.row do |c: &var Col|       # node 1, a container; cursor moves onto it
+  c.text("left")                # node 2, child of the row
+  c.col do |c2: &var Col|       # node 3, a nested container
+    c.text("a")                 # node 4, child of the col
+    c.text("b")                 # node 5, child of the col
+  end
+end
+```
+
+`row` (X axis) and `col` (Y axis) push a container node, move the cursor onto
+it, run the block, then restore the cursor — so nesting is arbitrary. The
+layout pass (`App.arrange`, docs/LAYOUT.md) walks this tree; containers paint
+nothing, their children paint themselves.
+
+### Reactive children inside a container — fully supported
+
+`dyn_text` and `button` work as container children, not just at the top level:
+the closures they store keep their captured `State` handles, so a reactive
+child re-renders on state change and a button child can mutate state, exactly
+like a top-level node.
+
+```ruxen
+root.row do |c: &var Col|
+  c.dyn_text({ |ui| "n: #{count.get(ui)}" })                 # re-renders on change
+  c.button("tap", { |ui| count.update(ui, { |x| x + 1 }) })  # mutates state
+end
+```
+
+This depended on ruxen **Q26** — a capturing closure stored through a
+container's `build.(&var *self)` self-reborrow used to lose its captures
+(wrong `Int`; SIGSEGV for a captured class handle). Q26 was fixed and
+installed (2026-06-08); `tests/nesting.rx` pins it ("a dyn_text child
+re-renders when a button child mutates its state"). The targeted-repaint
+invariant holds through containers: a child state change flushes and repaints
+exactly the subscribed child, never its container or siblings.
+
+### Container styling: padding, background, border
+
+A container can carry a `Style` — built with chainable setters and passed to
+`row_styled` / `col_styled` (plain `row`/`col` stay zero-style):
+
+```ruxen
+let style = Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4)
+root.row_styled(style) do |c: &var Col|
+  c.text("x")
+end
+```
+
+| Setter | Meaning |
+|---|---|
+| `pad(n)` | uniform padding (px) on all four sides |
+| `background(r, g, b)` | background fill colour (RGB 0-255) |
+| `border(width, r, g, b)` | border stroke width (px) + colour |
+| `radius(n)` | corner radius (px) for background **and** border |
+
+Each setter returns the `Style` for chaining; unset fields draw nothing
+(`background`/`border` are optional, padding defaults to 0).
+
+- **Layout.** Padding insets the container's children (they lay out inside
+  `box - padding`) and grows the container's own box by `2*pad` on each axis.
+- **Paint.** The container records a background `fill_round_rect` then a border
+  `stroke_round_rect` at its full box (each only if set), *before* its children
+  — which paint later in tree order, so leaves land on top. Two display-list
+  ops (`op_round_rect` / `op_stroke_rect`) carry a corner radius and (for the
+  stroke) a width; the example binary's `PaintSurface` backend maps them onto
+  canvas's `draw_round_rect` / `stroke_round_rect`.
+
+Style lives in parallel `Int` hashes on `Col` (the same flat-arena discipline
+as the tree links; absent ⇒ unstyled), not a recursive/`Option`-typed field.
+Pinned by `tests/style.rx`. Margins and gradient/shadow fills are deferred —
+additive on the same `Style`, no API break.
+
+### F1 layout: gap, alignment, grow, per-side padding (`docs/LAYOUT.md`)
+
+`Style` carries the container-layout knobs too — set them with the same chainable
+builders and hand the `Style` to `row_styled` / `col_styled` (every knob defaults
+to the v1 behaviour, so an unstyled container is unchanged):
+
+| Setter | Meaning | Default |
+|---|---|---|
+| `gap(n)` | px between adjacent children on the main axis (not at the ends) | 0 |
+| `pad_sides(l,t,r,b)` | per-side padding (overrides `pad`) | uniform `pad` |
+| `justify(j)` | main-axis distribution of leftover space | `just_start` |
+| `align(a)` | cross-axis alignment of each child | `align_start` |
+| `grow(n)` | this container's main-axis grow weight in ITS parent | 0 |
+| `offset(l,t)` | this child's offset within a `stack` parent | 0, 0 |
+
+`pad(n)` is the uniform shorthand — it sets all four per-side fields to `n` (so
+existing `pad(8)` is `pad_sides(8,8,8,8)`); `pad_sides` overrides per side.
+
+```ruxen
+root.row_styled(Style.new.gap(12).justify(just_space_between()).align(align_center())) do |c: &var Col|
+  c.text("left")
+  c.text("right")
+end
+```
+
+- **`justify`** constants: `just_start` (default), `just_center`, `just_end`,
+  `just_space_between`, `just_space_around` — they distribute any *leftover*
+  main-axis space (container inner main extent − children − gaps). Leftover only
+  exists when a parent has stretched/grown the container past its content (a row
+  is otherwise exactly its content wide), so `justify` is most useful inside an
+  `align(align_stretch())` parent or a grown container.
+- **`align`** constants: `align_start` (default), `align_center`, `align_end`,
+  `align_stretch`. `align_stretch` resizes each child to the container's inner
+  cross extent (the one case that grows a child beyond intrinsic).
+- **`grow(n)`** — a child container's weight; the parent splits its leftover
+  main-axis space among grown children proportionally (the last grown child
+  absorbs integer-division rounding so the line exactly fills). `grow` is read by
+  the PARENT place pass. Scope: styled containers. To grow a bare leaf, wrap it
+  in a 1-child styled container (`c.row_styled(Style.new.grow(1)) do |g| g.text(…) end`)
+  — leaf-level grow is deferred (a `text` takes no `Style`).
+
+Pinned by `tests/flex.rx` (geometry asserted to the pixel + a hit-test pin).
+`shrink` (overflow) is deferred — v1 does not shrink below intrinsic.
+
+### `stack` / positioned overlap (`docs/LAYOUT.md`)
+
+A `stack` is a container whose children **all occupy its box** (size = the max of
+its children on both axes), each optionally offset by its own
+`Style.offset(left, top)`. Z-order is build order — the first child is at the
+bottom, the last on top. The primitive for badges, overlays-in-tree, layered
+art.
+
+```ruxen
+root.stack do |c: &var Col|
+  c.text("base")                                          # bottom
+  c.col_styled(Style.new.offset(40, 0)) do |b: &var Col|   # a badge, offset right
+    b.text("9")
+  end                                                     # on top
+end
+```
+
+- **Layout.** Each child sits at the stack's padded origin + its `offset`, at its
+  intrinsic size. The stack box is the max child extent on each axis.
+- **Paint.** Children paint in build order (bottom → top) — the existing
+  `paint_tree` child walk, no clip/translate.
+- **Hit-test.** Children hit-test in **reverse** build order, so the topmost
+  (last-built) overlapping interactive child wins — the one place `hit_test`
+  special-cases a container kind (`hit_stack_children`).
+
+`stack` (and `stack_styled`) is a `&block` + `yield` builder like `row`/`col` —
+the param must be typed (`do |c: &var Col| … end`). Pinned by `tests/stack.rx`
+(layout, offset, paint order, reverse hit-test). Deferred: z-index reordering
+distinct from build order, clip-to-stack.
+
+### Vertically-scrolling `List`
+
+A `list` is a `col`-like vertical container with a **fixed viewport height**: it
+clips its children and scrolls them when the content overflows.
+
+```ruxen
+root.list(96) do |c: &var Col|    # 96px viewport
+  c.text("row 1")
+  c.text("row 2")
+  c.text("row 3")
+  c.text("row 4")                 # below the viewport — clipped until scrolled
+end
+```
+
+- **Layout.** The list's box is its viewport height (it does **not** grow to fit
+  its children, unlike `row`/`col`). Children lay out in *content space* —
+  natural, offset-free positions — and the list records its content height (sum
+  of child heights) for clamping. So `app.y_of(child)` is the unscrolled
+  position; the on-screen position is `y_of(child) - app.scroll_of(list)`.
+- **Scroll state** lives on `App` (runtime, like geometry), keyed by the list's
+  node id:
+
+  | Call | Effect |
+  |---|---|
+  | `app.scroll_to(list_id, offset)` | set offset, clamped to `[0, content − viewport]`, then re-arrange |
+  | `app.scroll_by(list_id, dy)` | scroll by a delta (clamped) |
+  | `app.scroll_of(list_id)` | current offset |
+  | `app.content_height_of(list_id)` | laid-out content height |
+
+- **Paint.** The paint pass became a recursive tree walk (identical output to the
+  old flat id loop for un-nested trees — the pins prove it). A list wraps its
+  children in `push_clip(viewport)` + `push_translate(0, -offset)` and a closing
+  `pop_state` — display-list ops `op_save` / `op_clip` / `op_translate` /
+  `op_restore`, mapped onto canvas `save` / `clip_rect` / `translate` /
+  `restore` by the binary's `PaintSurface` backend. Off-viewport children still
+  visit the surface, but the clip masks them.
+- **Scroll input.** A windowed shell forwards canvas's `Event.Scroll(dx, dy)`
+  (mouse wheel) to `app.scroll(dx, dy)`, which routes the wheel to the innermost
+  scrollable list under the last hovered point (`pointer_move` records the
+  hover) and `scroll_by`s it one row per click — `+dy` (wheel up/away) scrolls
+  content toward the top (decreases the offset). The programmatic
+  `scroll_to`/`scroll_by` remain the direct, headless-testable surface.
+- **Hit-testing is scroll/clip-aware.** `hit_test`/`pointer_down` mirror the
+  paint walk: a recursive descent carrying an accumulated content offset.
+  Entering a list adds its scroll offset (a screen point maps to that level's
+  content space as `(x + ox, y + oy)`) and requires the point to be inside the
+  list's viewport box (the clip) before any child is reachable. So a click fires
+  the on-SCREEN child — not the unscrolled one — and a click outside the
+  viewport (or on an item scrolled out of view) hits nothing. Nested lists
+  accumulate: offsets sum, viewports intersect. Pinned by
+  `tests/list_interaction.rx`.
+
+Viewport height is stored in a per-node `Int` hash on `Col` (flat-arena
+discipline; absent ⇒ not a list), keyed by `kind_list`. Pinned by
+`tests/list.rx`. Virtualization is deferred (additive).
+
+**Scrollbars (F2).** When a list's content overflows its viewport, a rounded
+thumb paints on the trailing edge (right for a vlist, bottom for an hlist), sized
+and positioned from the ratios `thumb_len = viewport² / content` (min-clamped)
+and `thumb_pos = start + (viewport − len) * scroll / max_scroll`. It paints in
+viewport space *after* the clip restore, so it overlays content and does not
+scroll. No fade/animation. `scrollbar_visible?` / `scrollbar_thumb_h` (length) /
+`scrollbar_thumb_y` (position) expose the geometry; pinned by `tests/scrollbar.rx`.
+
+**Horizontal scroll (F2): `hlist`.** `root.hlist(viewport_w) do |c| … end` is a
+horizontally-scrolling list — children stack + clip + scroll on **X**, the
+viewport is a fixed width, and the scrollbar is a horizontal bar at the bottom:
+
+```ruxen
+root.hlist(200) do |c: &var Col|
+  c.text("col 1")
+  c.text("col 2")            # overflows 200px → clips + scrolls on X
+end
+```
+
+`hlist` reuses `kind_list` plus a per-node `horizontal` flag, so the clip /
+scroll / hit-test / fling / scrollbar machinery is shared on an axis-tagged
+offset (the vertical path is byte-identical). The wheel scrolls on `dx` (falling
+back to `dy` so a plain vertical wheel still moves it); drag-scroll tracks the X
+position. Pinned by `tests/hlist.rx`. Virtualization for very long rows is
+deferred.
+
+### Single-line text `Input`
+
+`input` is a focusable, editable field bound to a reactive `State[String]`:
+
+```ruxen
+let name = ui.state_str("")
+root.text("name:")
+root.input(name, 160)             # 160px-wide field
+```
+
+The input node is a tracking scope (its compute reads `name`), so it
+re-renders like a `dyn_text` when the value changes — reusing the reactive-child
+machinery. The `State[String]` is the source of truth; the user holds it and can
+read it.
+
+- **Focus.** `App` tracks `focused` (the focused input's node id, `-1` = none).
+  `app.pointer_down(x, y)` over an input sets focus to it (and `hit_test` now
+  matches inputs as well as button handlers). `app.focused_node` reads it. Only
+  the focused input consumes key input.
+- **Typing.** `app.text_input(cp)` (alias `type_char(cp)`) inserts the Unicode
+  codepoint `cp` at the focused input's caret (single-lock RMW) and advances it.
+  This is the ONLY path that adds text — see "Windowed event contract" below.
+- **Editing / caret.** `app.key_down(code)` (alias `key(code)`) routes a CONTROL
+  key to the focused input:
+
+  | `code` | Effect |
+  |---|---|
+  | `key_backspace` | delete the char before the caret, caret-- |
+  | `key_delete` | delete the char at the caret (caret stays) |
+  | `key_left` / `key_right` | move the caret (clamped to `[0, len]`) |
+  | `key_home` / `key_end` | caret to start / end |
+
+  `key_down` no longer inserts printable characters (that's `text_input`).
+  Editing mutates the value `State` → `flush` → repaints just the input;
+  `app.caret_of(input_id)` reads the caret index.
+- **Caret + paint.** `App` keeps a per-input `caret` index. Paint draws a field
+  box (`fill_round_rect`), the text, and — only when focused — a thin caret
+  `fill_rect` at `x + pad_x + caret * char_width` (the char-metric estimate
+  layout already uses; real Skia advance widths later).
+- **Layout.** Fixed `width` (stored in a per-node `Int` hash on `Col`), one line
+  tall (`row_height`).
+
+The value `State[String]` is held in a per-`Col` value pool
+(`Array[State[String]]` + a node-id→index hash), the same index-pool pattern as
+`computes`. **Edits go through a single `State.update(ui, { |cur| … })`** — a
+`peek`-then-`set` pair on one handle would hold two Mutex locks across the frame
+and corrupt the value (the "one lock per frame" landmine; see CLAUDE.md).
+Pinned by `tests/input.rx`.
+
+### F3: production text editing — selection, clipboard, IME, textarea, undo
+
+The single-line `input` grew a full editing surface (F3 —
+`docs/decisions/text-editing.md`). All of it is **App-level runtime state** (like
+caret/scroll/capture) reached through App entry points or **injected seams**;
+quiver stays canvas-free. Every piece is default-inert — a plain `input` with no
+selection / no marked text / no clipboard seam is byte-identical to the old one.
+
+- **Selection (anchor + caret).** Each input has an `anchor` alongside its
+  `caret`; the selection is `[min, max]` of the two (empty when equal). A pointer
+  press sets `anchor = caret =` the char under x (from **measured prefixes**) and
+  begins a **caret drag** (reuses the `captured` drag primitive, generalised from
+  sliders); `pointer_move` extends the selection, `pointer_up` ends the drag.
+  Readers: `anchor_of` / `sel_start_of` / `sel_end_of` / `has_selection?` /
+  `selected_text` / `select_all` / `place_caret`. Caret/selection x come from
+  `prefix_width` (the measure seam; char-metric fallback — so the default caret
+  position is unchanged).
+
+- **Modifier-aware keys.** `key_down_mod(code, shift, ctrl)` is the new entry:
+  `shift` extends the selection (arrows/home/end keep the anchor), `ctrl` runs
+  clipboard/undo shortcuts (c/x/v/z, a = select-all). **`key_down(code)` (and the
+  `key` alias) now forward to `key_down_mod(code, false, false)`** — back-compat,
+  every existing caller and pin unchanged. canvas's `Event.KeyDown` carries no
+  modifiers yet (filed gap), so the windowed shells pass `false`/`false`; keyboard
+  selection-extend + ctrl-shortcuts are reachable through this API and headless
+  tests, dormant on a real window until canvas adds a modifier bitmask.
+
+- **Clipboard seam.** `set_clipboard(get, set)` injects two closures (the
+  measure/clock 0-or-1-pool pattern). `copy` / `cut` / `paste` operate on the
+  focused input's selection (single-lock RMW). The shell wires canvas's
+  `Window.clipboard_text` / `set_clipboard_text`; headless tests inject a
+  **`ClipboardCell`** (a shared `Send` String cell — the headless clipboard
+  backend, like `RecordingSurface` is the headless paint backend; a bare
+  `Mutex[String]` corrupts through a closure on this ruxen build). With no seam,
+  copy/cut/paste are inert. `clipboarded?` reports the state.
+
+- **IME composition.** `text_editing(start, len, text)` stores the focused input's
+  **marked (uncommitted) text**; paint renders it inline at the caret with a thin
+  underline rect (no new op). The committing `TextInput` clears the mark and
+  inserts the final char — quiver mirrors how canvas/SDL sequences
+  `Event.TextEditing` + `composition_text` → committed `TextInput`. Reader:
+  `marked_text_of`.
+
+- **Multi-line `textarea`.** `root.textarea(state, width, rows)` is a multi-line
+  input: one `State[String]` with `\n` separators (no recursive line types — the
+  caret is a **flat char index**; `App` scans newlines for line nav). The box is
+  `rows * row_height` tall. Up/down move the caret across lines preserving the
+  char column (clamped to the target line); home/end act on the caret's **line**,
+  not the whole buffer. Reuses all the single-line machinery (focus/selection/
+  clipboard/undo/IME). Paint draws each line on its own row + the caret at its
+  line/column. (Measured-x column preservation, multi-line selection rects across
+  lines, soft wrap, and internal scroll are deferred — filed.)
+
+- **Undo.** Per-input bounded snapshot ring of `(value, caret)`; a snapshot is
+  pushed before each mutating edit, with **clock-distance coalescing** (rapid
+  typing within `undo_group_ms` of the previous edit folds into one entry — the
+  clock seam again, so headless tests bump the injected clock to model a pause).
+  `undo` restores the exact prior `(value, caret)`. A redo stack is kept (a fresh
+  edit clears it).
+
+Pinned by `tests/text_editing.rx` (20). The single-line `input` /
+`caret_edit.rx` pins stay green unchanged (a collapsed selection = caret-only =
+old behaviour). **Deferred (filed):** real keyboard modifiers (canvas gap),
+multi-line selection rects, measured-x column on up/down, soft wrap, textarea
+internal scroll, word-granularity moves, double-click word select.
+
+### F4: animation (`docs/decisions/animation.md`)
+
+Animation is **App-level runtime state** (like scroll/caret/capture), not tree
+structure — so there is no `Col` builder for it; you drive it through App calls,
+naming a node by id (the same way `scroll_to` / `place_caret` / `tween_*` do).
+It builds on the F2 clock seam: `App.tick` (which the window loop already calls
+each frame) advances every live tween from the one clock delta, alongside fling.
+Everything is **default-inert** — with no live animation, paint is byte-identical.
+
+| Call | Effect |
+|---|---|
+| `tween_offset(node, fx,fy, tx,ty, dur, curve)` | animate a **paint-time** offset (a translate — shifts where the node draws, NOT a layout move) |
+| `tween_color(node, fr,fg,fb, tr,tg,tb, dur, curve)` | animate a colour override (RGB lerp into the node's fill/text) |
+| `tween_offset_done(…, { \|ui\| … })` / `tween_color_done(…, { \|ui\| … })` | as above + a STORED completion closure fired **once** at retirement |
+| `transition_color(node, dur, curve)` + `set_color(node, r,g,b)` | implicit transition: a marked node animates from its current colour to the new one instead of snapping |
+| `animating?` / `animating_node?(node)` | liveness queries (`tick`'s bool return already drives the loop) |
+
+- **Curves** are `curve_linear` / `curve_ease_in` / `curve_ease_out` /
+  `curve_ease_in_out` — plain Int constants. Easing computes in **fixed-point
+  per-mille** (`ease(curve, p)` maps `p ∈ [0, anim_scale()=1000]` → eased; quiver's
+  design space is Int, so no Float). A tween **clamps to its end value byte-exact**
+  on retirement.
+- **Targeted repaint holds.** A tween marks **only** its node dirty (and only on
+  the ticks where the resolved value actually moved), so a colour/offset animation
+  repaints exactly that node — siblings never repaint. Offset is paint-time, so it
+  never re-`arrange`s.
+- **Completion closures are STORED** (`{ |ui| … }` brace idiom, pooled), fired
+  exactly once. A new tween on the same node+channel **supersedes** the live one.
+- **Stepping is deterministic** under the clock seam: N ticks after a tween starts
+  → a known fixed-point value sequence per curve. Pinned by `tests/animation.rx`
+  (16) — curve midpoints, retirement + slot reuse, dirty-set exactness, fling +
+  tween coexistence, completion-once, supersede, colour lerp, implicit transition.
+
+**Showcase:** `examples/settings`' Save button colour-pulses on click (flash to a
+green highlight, fade to grey via `tween_color`).
+
+**Deferred (filed):** size (w/h) tweens (a layout-input animation — per-frame
+re-arrange); opacity / group alpha (needs a `PaintSurface` opacity op — canvas
+has `save_layer_alpha`); repeat / yoyo / delay / spring curves; implicit offset +
+reactive-colour transitions; stagger / timeline sequencing.
+
+### `Checkbox`
+
+`checkbox` is a clickable widget bound to a reactive `State[Bool]`:
+
+```ruxen
+let agree = ui.state_bool(false)
+root.checkbox(agree, "I agree")
+```
+
+The node is **both** a tracking scope and clickable:
+- its **compute** reads the bool (`state.get(ui)`), so the node subscribes and
+  re-renders on toggle — reusing the reactive-child machinery;
+- its **handler** toggles the bool with a single `state.update(ui, { |b| !b })`.
+  This is a **single-lock read-modify-write** — never `peek` then `set`, which
+  would hold two Mutex locks across the frame and corrupt the value (the "one
+  lock per frame" landmine; see CLAUDE.md).
+
+A click anywhere on the box+label region runs the handler → toggle → `flush` →
+repaint just the checkbox. It composes inside `row`/`col`/`list`/styled
+containers and hit-tests correctly through list scroll (it's a handler node, so
+the scroll/clip-aware `hit_test` already covers it). `app.checkbox_checked(id)`
+reads the live checked state (a lone `peek`, no `set` in the frame — safe).
+
+- **Paint.** A bordered square (`stroke_round_rect`), a **filled inner mark**
+  (`fill_rect`, inset 3px) only when checked, and the label beside it after a
+  `pad_x` gap. No new display-list op — a filled inner square is the mark this
+  round (a real check glyph waits for Skia text/paths).
+- **Layout.** Leading pad + box (`check_box_size`) + gap + char-metric label
+  width + trailing pad, one line tall.
+
+The `State[Bool]` is held in a per-`Col` bool pool (`Array[State[Bool]]` + a
+node-id→index hash), the same index-pool pattern as inputs. `Ui.state_bool`
+mints the handle. Pinned by `tests/checkbox.rx`. A toggle/switch is the same
+node with a pill-shaped paint — deferred (additive).
+
+### Pointer dispatch + drag capture
+
+`App` dispatches three pointer events, all returning the hit/captured node id
+(or `-1`), plus key dispatch:
+
+| Call | Effect |
+|---|---|
+| `pointer_down(x, y)` | hit-test; focus an input, **capture** + set a slider, or run a button/checkbox handler |
+| `pointer_move(x, y)` | if a node is **captured**, drive it from `x` regardless of where the pointer is; else no-op |
+| `pointer_up(x, y)` | release the capture |
+
+`App` tracks a `captured` node id (like `focused` for inputs); `captured_node`
+reads it. Capture is the reusable drag primitive: a widget that needs
+press-drag-release (today the slider) captures on `pointer_down`, is driven by
+every `pointer_move` until `pointer_up`. The windowed shell forwards real
+`PointerMove`/`PointerUp` into these, the same way it forwards scroll/keys.
+
+### F2: pixel scroll, fling, the clock seam, and `tick` (`docs/LAYOUT.md`)
+
+Scrolling is in **pixels**. A wheel `scroll(dx, dy)` moves `scroll_line` px per
+click (default `row_height`; `set_scroll_line(px)` overrides, `scroll_line_px`
+reads it). The Int App boundary is deliberate — deterministic and headless —
+so the shell quantizes canvas's `Float32` wheel deltas to Int clicks before
+calling. `scroll_to`/`scroll_by` take pixel offsets directly.
+
+**Drag-to-scroll + fling momentum.** A `pointer_down` that lands in a scrollable
+list's viewport but **not** on an interactive child captures that list;
+`pointer_move` then scrolls it by the drag delta and tracks velocity;
+`pointer_up` seeds a fling. The shell calls **`App.tick`** once per frame (before
+repaint): it steps each active fling (`offset += v`, then `v *= ~0.92`) until the
+velocity falls below threshold or the scroll clamps at an end, and returns `true`
+while anything is still moving (so the shell keeps drawing). `tick` also fires
+due long-presses.
+
+**The clock seam** (mirrors `set_measure`): `set_clock({ || Int })` injects a
+monotonic-ms timebase. With none injected, `now` returns a frame counter that
+`tick` advances — so fling + long-press are **exactly reproducible** in tests
+without a real clock. `clocked?` reports which is active. Inject the real clock
+in the shell binary (`app.set_clock({ || canvas.now_ms })`), never in quiver.
+
+**Tap vs long-press.** A press fires button/checkbox handlers immediately — a
+click IS a tap (unchanged). For a long-press, attach a handler to the
+just-built node with `c.long_press({ |ui| … })`:
+
+```ruxen
+c.button("item", { |ui| open(ui) })
+c.long_press({ |ui| open_context_menu(ui) })   # decorates the button above
+```
+
+`long_press` is the **one post-hoc modifier** in the DSL — every builder returns
+`nil` (the arena is push-only, no node handle to chain on), so a gesture handler
+attaches by node id to `self.size - 1`. It is a STORED `{ |ui| … }` closure (the
+brace idiom — re-invoked when a long-press fires), in a `long_press_handlers`
+pool. `tick` fires it once when the press is held past `long_press_ms` without
+moving past `gesture_slop`; a move past slop or an up before the threshold
+cancels it (→ a plain tap). Long-press nodes are hit-testable. Pinned by
+`tests/scroll_gestures.rx`. Double-tap is deferred.
+
+### `Slider`
+
+`slider` is a draggable horizontal control bound to a reactive `State[Int]`
+clamped to `[min, max]`:
+
+```ruxen
+let vol = ui.state(50)
+root.slider(vol, 0, 100, 200)     # min 0, max 100, 200px wide
+```
+
+The node is a tracking scope (its compute reads the value), so the thumb
+re-renders on change. Interaction:
+- a **click on the track** jumps the value to the click fraction;
+- **dragging** the thumb updates continuously via the capture above — a
+  `pointer_move` anywhere (even off the slider) drives the captured slider.
+
+Screen x → value: `track_left = x + thumb/2`, `track_w = width - thumb`, and
+`v = min + round((px - track_left) / track_w * (max - min))`, clamped to
+`[min, max]`. The value is computed from **geometry only — no state read** — so
+writing it is a **single-lock `state.set(ui, v)`** (never `peek` then `set`,
+which would collide on the Mutex; see CLAUDE.md). value → thumb center x inverts
+the same map (`slider_thumb_center_x`, used by paint). Programmatic
+`drag_to(id, x)` / `set_value(id, v)` / `slider_value(id)` are the
+headless-testable surface.
+
+It **hit-tests correctly inside scrolled lists**: `hit_tree` matches sliders and
+already accounts for the list scroll offset/clip, and the X-axis value math is
+unaffected by vertical scroll (capture stores the id; `pointer_move` maps screen
+x against the slider's content-space x, identical for vertical-only scroll).
+
+- **Paint** (no new op): a track bar (`fill_round_rect`), a filled portion from
+  the track left to the thumb, and the thumb (a rounded square) centered at the
+  value's x.
+- **Layout**: fixed `width`, one row tall.
+
+The `State[Int]` is held in a per-`Col` int pool (`Array[State[Int]]` + a
+node-id→index hash) alongside per-slider `min`/`max`/`width`. Pinned by
+`tests/slider.rx`. Vertical, range (two-thumb), and float sliders are deferred
+(additive).
+
+### Overlay / popup primitive
+
+`App` has a single **overlay slot** — a node rendered above all normal content
+that captures interaction. It is the reusable basis for dropdowns, context
+menus, tooltips, and modals.
+
+| Call | Effect |
+|---|---|
+| `open_overlay(owner, x, y)` | open the overlay owned by `owner`, anchored at screen `(x, y)` |
+| `close_overlay` | close it |
+| `overlay_open?` | whether one is open |
+
+`overlay_owner` is the open overlay's owning node (-1 = none); `overlay_x` /
+`overlay_y` its anchor. Two rules make it behave like a real popup:
+
+- **Paint on top.** `paint_all` paints the main tree first, then — if open — the
+  overlay LAST, so it sits above everything.
+- **Hit-test first + click-outside-dismiss.** While an overlay is open,
+  `pointer_down` routes to the overlay *before* the normal tree: a click inside
+  the popup acts on it, a click **outside dismisses the overlay and is
+  consumed** (it does NOT fall through to the content below).
+
+One overlay at a time this round (no nested overlays).
+
+### Dropdown / `Select`
+
+`select` is a dropdown bound to a reactive `State[Int]` (the selected index)
+over an `Array[String]` of options:
+
+```ruxen
+let choice = ui.state(0)
+root.select(choice, options, 160)     # 160px trigger
+```
+
+- The **trigger** is a button-like box showing the current option + a ▾ arrow.
+  Its compute reads the index, so the trigger reflects the selection reactively;
+  `app.select_value(id)` / `app.select_text(id)` read the index / current option.
+- **Clicking the trigger** opens the overlay popup anchored just below it (a
+  panel + one row per option, the selected row highlighted).
+- **Clicking an option** writes the index with a single-lock `state.set(ui, k)`
+  (the index comes from the click row geometry — no state read, so no peek+set)
+  and closes the overlay; the trigger then shows the new option.
+- **Clicking outside** closes the overlay without changing the value.
+
+Options are stored in a flat per-`Col` string pool (one array for all selects, a
+per-select `(start, count)` slice); the selected index reuses the int pool.
+Paint reuses existing ops (`fill_round_rect`/`fill_rect`/`draw_text`) — no new
+op. Pinned by `tests/select.rx` (including a paint-order assertion that the popup
+panel is recorded after the trigger box). Multi-select, typeahead, nested
+overlays, and a scrollable popup (for very long option lists) are deferred.
 
 ## Why it must stay pinned with tests
 
@@ -61,3 +731,134 @@ boundary") asserts that across any number of clicks only the `dyn_text`
 node is ever refreshed; `tests/counter.rx` asserts one repaint per tap,
 zero on idle frames. If those tests change, the rule changed — that is a
 breaking design event, not a refactor.
+
+## Writing a quiver app
+
+The worked, multi-file reference is **`examples/settings`** — a reactive
+settings panel exercising the whole widget set, organised the way a real app
+is (model / views / shell), and heavily commented. Read it alongside this doc.
+The patterns it teaches:
+
+- **One build block, run once.** `App.build({ |ui, root| … })` constructs the
+  tree once; quiver reacts by re-running `dyn_text` content closures of existing
+  nodes, never by rebuilding. Structure is fixed; **values** are reactive.
+- **Views are functions.** A view is a free function `view(root: &var Col, …)`
+  that appends a subtree. Compose by calling them in order from the build block.
+  (Files in a binary package flat-merge — no `use` between them.)
+- **State by reference, deref'd to a local.** `State[T]` is non-`Copy`; a view
+  takes `&State[T]` and does `let v = *handle`. Each consumer (a builder taking
+  it by value, or a capturing closure) needs its **own** local copy.
+- **RMW is a single `update`.** Editing state goes through one
+  `state.update(ui, { |v| … })` / `set` — never `peek` then `set` (two locks per
+  frame on the same mutex corrupt the value). The widgets do this for you.
+- **The shell stays in the binary.** The window + event loop + the canvas-facing
+  paint backend live in the example's `main.rx`; quiver itself is platform-free.
+  The windowed path defines its OWN `PaintSurface` implementor (`SkiaPaint`) that
+  quiver's generic paint pass drives DIRECTLY onto canvas — no recorded mirror,
+  one walk per frame (ruxen Q17; see docs/decisions/direct-paint-backend.md). The
+  headless path keeps painting into `RecordingSurface` and narrating, so CI /
+  no-display runs exercise the same pipeline. Forward canvas events into `App`'s
+  dispatch (see below); flush + repaint only when the dirty set is non-empty.
+
+### Windowed event contract
+
+A windowed shell forwards each `canvas` `Event` to the matching `App` method —
+quiver consumes the events, the shell never interprets them:
+
+| `canvas` event | `App` call | what it does |
+|---|---|---|
+| `PointerDown(x, y)` | `pointer_down(x, y)` | hit-test → focus / click / open / capture |
+| `PointerMove(x, y)` | `pointer_move(x, y)` | record hover + drive a captured drag |
+| `PointerUp(x, y)` | `pointer_up(x, y)` | release the drag capture |
+| `TextInput(cp)` | `text_input(cp)` | **insert** the Unicode codepoint at the caret |
+| `KeyDown(k)` | `key_down(k)` | **control only** — backspace/delete edit, arrows/home/end move the caret |
+| `Scroll(dx, dy)` | `scroll(dx, dy)` | wheel → scroll the innermost hovered list |
+| `Resize(w, h)` | `resize(w, h)` | record design size + re-arrange |
+| `CloseRequested` | (quit the loop) | |
+
+Plus, once per frame **before repaint**, the loop calls `app.tick` (advances the
+fling/long-press clock; flush + repaint when it returns `true`) and, on a real
+shell, `app.set_clock({ || canvas.now_ms })` once at startup.
+
+The split that matters: **`TextInput` is the only path that adds text** (it
+carries the OS-composed, shift/layout-correct codepoint — `'A'`=65, `'é'`=233),
+and **`KeyDown` is control-only** (real platform keycodes for Backspace/Delete/
+arrows/Home/End, passed straight through — no remapping). Keep a `_ -> nil`
+catch-all so new event variants don't break the match.
+
+### Real text metrics (the injected measure seam)
+
+quiver sizes text by a **char-metric estimate** (`char_width()` px per char) by
+default. A shell with a real text engine injects **true advance widths** through
+a seam — quiver never imports the engine (it is canvas-free by charter; see
+`docs/decisions/text-metrics-seam.md`):
+
+```
+app.set_measure({ |text, size| canvas.measure_text_sized(text, size as Float32) })
+```
+
+- The closure takes the display string + quiver's slice font size (`text_size()`)
+  and returns the advance width in px. `arrange` routes leaf-text and checkbox-
+  label widths through it (the box widths of input/slider/select are fixed at
+  build time and unaffected).
+- **The default is the char-metric estimate.** With no measure injected,
+  geometry is byte-identical to before — so headless runs, the test suite, and a
+  Skia-less example all behave the same (no `Err`, no behavioural cliff).
+  `app.measuring?` reports whether a measure fn is set.
+- The seam is wired **in the shell binary** — the only place quiver (L2) and the
+  engine (L1) symbols meet. All three examples inject it on their windowed path
+  (plain capture of the window handle; **not** `move`) and skip it headless.
+- Measurement stays **once per leaf per `arrange`** (the flat pre-pass property);
+  a `dyn_text` whose text changes re-measures because `flush` re-`arrange`s, but
+  static text never re-measures per frame. Pinned by `tests/text_metrics.rx`.
+
+### Reactivity model: content + (opt-in) structure
+
+quiver reacts on **content** by default: a state change re-runs exactly the
+`dyn_text` closures that read it. The builder runs once and the tree is
+otherwise fixed — `text`/`dyn_text`/`button`/`input`/… are built once. Most
+apps (forms, dashboards, settings) react on *values* over a *fixed layout*.
+
+For dynamic UIs (a todo list, a feed — anything that **adds/removes rows**),
+there is one **opt-in structural-reactivity** construct: `list_of` bound to a
+shared `ListModel`. See "Dynamic lists (`list_of`)" below and
+`docs/decisions/structural-reactivity.md`. It does **not** change the
+build-once rule for everything else — `list_of` is the only node whose children
+are rebuilt.
+
+### Dynamic lists (`list_of`)
+
+`list_of` is a scrolling list whose children are **rebuilt from a `ListModel`**
+whenever the model changes — the structural-reactivity primitive.
+
+```ruxen
+let todos = ui.list_model                         # shared, mutable item model
+root.button("Add", { |u| todos.add(u, "task") })  # handler CAPTURES the model
+root.list_of(todos, row_height() * 6, { |c, m, i| # one row per item
+  c.text(m.row_text(i))
+})
+```
+
+- **`ui.list_model`** mints a `ListModel` — a `Send` class holding the items
+  (labels + done flags) plus a reactive `State[Int]` **version**.
+- **`model.add(ui, …)` / `toggle(ui, k)` / `remove(ui, k)`** edit the items and
+  bump the version through one `State.update` (single-lock RMW). The `list_of`
+  node subscribes to that version, so a mutation marks it dirty.
+- On `flush`, the dirty `list_of` **rebuilds its child subtree wholesale**:
+  clear its child chain, build one row per current item, re-`arrange` + repaint
+  — just that subtree (the rest of the tree is untouched). It reuses the
+  `list` viewport/clip/scroll, so it scrolls and hit-tests through scroll.
+
+Two handle rules (a `ListModel` is a non-Copy handle; a *method call* consumes
+it, a *closure capture* does not):
+
+1. **Capture in handlers first, pass to `list_of` last** — `let todos =
+   ui.list_model`; capture it in the button handlers (non-consuming), then move
+   it into `list_of` (consuming) last.
+2. **Re-fetch for ad-hoc mutations** — outside a captured handler, get a fresh
+   copy with `app.list_model_of(list_node_id)` per mutation (all share the
+   items).
+
+Worked example: **`examples/todo`**. Pinned by `tests/dynamic_list.rx`. Keyed
+diffing (row reuse), per-item reactive widgets, and reordering/animation are
+deferred — see the ADR.

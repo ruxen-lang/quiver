@@ -1,0 +1,129 @@
+# Pins the arena-nesting foundation: a node can own CHILDREN via flat
+# parallel child-id links + `-1` sentinels (never a recursive type, per the
+# ruxen v1 landmines). The flat-arena "ids ARE node ids" invariant holds:
+# every node still has a stable id = its build order index.
+Tester.describe("Col arena — nesting via child-id links") do |t: &var Tester|
+  t.it("a flat column has roots with no parent and no children") do
+    var col = Col.new
+    col.text("a")
+    col.text("b")
+    # both are top-level roots
+    t.expect(col.parent_of(0)).to_eq(-1)
+    t.expect(col.parent_of(1)).to_eq(-1)
+    # leaves: no children
+    t.expect(col.first_child_of(0)).to_eq(-1)
+    t.expect(col.first_child_of(1)).to_eq(-1)
+    # root sibling chain threads 0 -> 1 -> end
+    t.expect(col.root_head).to_eq(0)
+    t.expect(col.next_sibling_of(0)).to_eq(1)
+    t.expect(col.next_sibling_of(1)).to_eq(-1)
+  end
+
+  t.it("row() builds a container node that owns the nodes built inside it") do
+    var col = Col.new
+    col.text("title")                                  # node 0 (root)
+    col.row do |c: &var Col|                            # node 1 (root container)
+      c.text("left")                                    # node 2 (child of 1)
+      c.text("right")                                   # node 3 (child of 1)
+    end
+    t.expect(col.size).to_eq(4)
+    t.expect(col.kind_at(1)).to_eq(kind_row())
+    # the container is a root; its children point back to it
+    t.expect(col.parent_of(1)).to_eq(-1)
+    t.expect(col.parent_of(2)).to_eq(1)
+    t.expect(col.parent_of(3)).to_eq(1)
+    # child chain of the row: 2 -> 3 -> end
+    t.expect(col.first_child_of(1)).to_eq(2)
+    t.expect(col.next_sibling_of(2)).to_eq(3)
+    t.expect(col.next_sibling_of(3)).to_eq(-1)
+    # the title and the row are siblings at the top level
+    t.expect(col.root_head).to_eq(0)
+    t.expect(col.next_sibling_of(0)).to_eq(1)
+    t.expect(col.next_sibling_of(1)).to_eq(-1)
+  end
+
+  t.it("nesting is arbitrary: a col() inside a row() inside the root") do
+    var col = Col.new
+    col.row do |c: &var Col|               # 0 row
+      c.text("x")                          # 1 child of 0
+      c.col do |c2: &var Col|              # 2 col, child of 0
+        c.text("y")                        # 3 child of 2
+        c.text("z")                        # 4 child of 2
+      end
+    end
+    t.expect(col.size).to_eq(5)
+    t.expect(col.kind_at(0)).to_eq(kind_row())
+    t.expect(col.kind_at(2)).to_eq(kind_col())
+    # depth: 4's parent is 2, 2's parent is 0, 0 is a root
+    t.expect(col.parent_of(4)).to_eq(2)
+    t.expect(col.parent_of(2)).to_eq(0)
+    t.expect(col.parent_of(0)).to_eq(-1)
+    # row 0's children: x(1) then the col(2)
+    t.expect(col.first_child_of(0)).to_eq(1)
+    t.expect(col.next_sibling_of(1)).to_eq(2)
+    # col 2's children: y(3) then z(4)
+    t.expect(col.first_child_of(2)).to_eq(3)
+    t.expect(col.next_sibling_of(3)).to_eq(4)
+  end
+
+  t.it("out-of-range link accessors return -1, not panics") do
+    var col = Col.new
+    t.expect(col.parent_of(9)).to_eq(-1)
+    t.expect(col.first_child_of(9)).to_eq(-1)
+    t.expect(col.next_sibling_of(9)).to_eq(-1)
+  end
+
+  t.it("a dyn_text child records its compute slot and links like any node") do
+    var col = Col.new
+    col.text("title")                                   # node 0
+    col.row do |c: &var Col|                             # node 1
+      c.dyn_text({ |ui2: &var Ui| "x" })    # node 2 (child of 1)
+    end
+    # the dyn_text child is a normal arena node: kind, compute slot, links
+    t.expect(col.kind_at(2)).to_eq(kind_dyn_text())
+    t.expect(col.compute_at(2)).to_eq(0)                 # first compute slot
+    t.expect(col.parent_of(2)).to_eq(1)
+    t.expect(col.first_child_of(1)).to_eq(2)
+  end
+
+  # ruxen Q26 (capture-through-`&var *self`-reborrow) is FIXED: a closure
+  # built inside a container block keeps its captures, so reactive children
+  # (dyn_text/button) work exactly like top-level ones.
+  t.it("a reactive child subscribes through the Ui from inside a container") do
+    var ui = Ui.new
+    let count = ui.state(7)
+    var col = Col.new
+    col.row do |c: &var Col|
+      c.dyn_text({ |ui2: &var Ui| "n: #{count.get(ui2)}" })
+    end
+    ui.current_scope = 1
+    let out = match col.computes.get(0)
+      Some(f) -> f.(&var ui)
+      nil     -> "missing"
+    end
+    ui.current_scope = -1
+    t.expect(out).to_eq("n: 7")
+    t.expect(ui.subs.size as Int).to_eq(1)
+  end
+
+  t.it("a dyn_text child re-renders when a button child mutates its state") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let count = ui.state(0)
+      root.text("title")                                              # 0
+      root.row do |c: &var Col|                                       # 1
+        c.dyn_text({ |ui2: &var Ui| "n: #{count.get(ui2)}" })         # 2
+        c.button("tap", { |ui2: &var Ui| count.update(ui2, { |x| x + 1 }) }) # 3
+      end
+    })
+    # mount rendered the reactive child against live state
+    t.expect(app.text_of(2)).to_eq("n: 0")
+    # clicking the button child mutates state; flush refreshes ONLY the
+    # subscribed dyn_text child (node 2), not the static title or the button
+    app.click(3)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(1)
+    ArrayMatcher.new(&refreshed).to_include(2)
+    t.expect(app.text_of(2)).to_eq("n: 1")
+    t.expect(app.text_of(0)).to_eq("title")
+  end
+end

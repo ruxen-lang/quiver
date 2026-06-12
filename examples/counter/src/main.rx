@@ -11,29 +11,75 @@
 ## event stream; headless (CI, no display) it falls back to synthetic taps so
 ## the same pipeline still runs and prints its paint output.
 
-## Replay quiver's recorded paint commands onto a real canvas. quiver records
-## into its `RecordingSurface` (the single PaintSurface impl its generic paint
-## pass resolves against); here we read the structured mirror back out and
-## issue the matching Skia draw calls — the L2->L1 seam, all in the app binary.
-def replay(surface: &RecordingSurface, canvas: &var Canvas) -> nil
-  var i = 0
-  let n = surface.size
-  while i < n
-    let op = surface.op_at(i)
-    let col = Color.rgb(surface.r_at(i) as UInt8, surface.g_at(i) as UInt8, surface.b_at(i) as UInt8)
-    if op == op_clear()
-      let _ = canvas.clear(col)
-    elsif op == op_rect()
-      let rect = Rect.new(
-        surface.x_at(i) as Float32, surface.y_at(i) as Float32,
-        surface.w_at(i) as Float32, surface.h_at(i) as Float32)
-      let _ = canvas.draw_rect(rect, col)
-    else
-      let label = surface.text_at(i)
-      let _ = canvas.draw_text(label, surface.x_at(i) as Float32, surface.y_at(i) as Float32, col)
-    end
-    i = i + 1
+## SkiaPaint — this binary's DIRECT `PaintSurface` implementor (ruxen Q17). quiver's
+## generic paint pass (`paint_all`) monomorphizes against it and calls these methods
+## as it visits each node, issuing canvas/Skia draws on the spot — no recorded mirror,
+## one walk. Holds a borrow of the live `Canvas` for the frame (constructed inside the
+## begin/end bracket in `paint_frame`). Each method is the op→canvas mapping that used
+## to live in `replay`, transliterated 1:1. See docs/decisions/direct-paint-backend.md.
+class SkiaPaint
+  include PaintSurface
+  canvas: &var Canvas
+
+  def init(canvas: &var Canvas)
+    self.canvas = canvas
   end
+
+  def var fill_clear(r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let _ = self.canvas.clear(col)
+  end
+
+  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_rect(rect, col)
+  end
+
+  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let label = text.clone
+    let _ = self.canvas.draw_text(label, x as Float32, y as Float32, col)
+  end
+
+  def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_round_rect(rect, radius as Float32, col)
+  end
+
+  def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.stroke_round_rect(rect, radius as Float32, width as Float32, col)
+  end
+
+  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+    let _ = self.canvas.save
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.clip_rect(rect)
+  end
+
+  def var push_translate(dx: Int, dy: Int) -> nil
+    let _ = self.canvas.translate(dx as Float32, dy as Float32)
+  end
+
+  def var pop_state -> nil
+    let _ = self.canvas.restore
+  end
+end
+
+## Paint one frame DIRECTLY to the OS window: open a frame, drive quiver's paint
+## pass through `SkiaPaint` (which issues the Skia calls as it walks), end + present.
+def paint_frame(win: &var Window, app: &var App) -> nil
+  match win.canvas.begin_frame
+    Ok(_)  -> nil
+    Err(e) -> puts "begin_frame: #{e}"
+  end
+  var skia = SkiaPaint.new(&var win.canvas)
+  paint_all(app, &var skia)
+  let _ = win.canvas.end_frame
+  let _ = win.present
 end
 
 ## Print the commands recorded since `from`, returning the new size.
@@ -51,7 +97,7 @@ def main
   puts "quiver counter — live window demo"
   let w = 200
   let h = 96
-  match Window.open(String.from("Counter"), w, h)
+  match Window.open("Counter", w, h)
     Ok(win) -> drive(win)
     Err(e)  -> puts "cannot create canvas: #{e}"
   end
@@ -66,12 +112,14 @@ def drive(win0: Window) -> nil
   var app = App.build({ |ui: &var Ui, root: &var Col|
     let count = ui.state(0)
     root.text("Counter")
-    root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
-    root.button("tap +1", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+    # Stored-closure params need no type annotation — quiver infers `ui2: &var Ui`
+    # from the builder's signature, so the block reads as a plain Ruby block.
+    root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })
+    root.button("tap +1", { |ui2| count.update(ui2, { |c| c + 1 }) })
   })
   var surface = RecordingSurface.new
 
-  let shown = match win.show_scaled(3)
+  let shown = match win.show_gpu_scaled(3)
     Ok(_)  -> true
     Err(e) -> announce_headless(e)
   end
@@ -100,44 +148,41 @@ def drive(win0: Window) -> nil
     return
   end
 
-  # -- Windowed: first frame, then the live event loop --
-  paint_all(&app, &var surface)
-  blit(&var win, &surface)
+  # -- Windowed: inject real text metrics, then paint the first frame + loop --
+  # The binary is the only place quiver (L2) and canvas (L1) symbols meet, so the
+  # measure seam is wired HERE (quiver stays canvas-free). Plain capture of `win`
+  # (not `move` — non-Copy class) is sound today; the closure asks canvas for the
+  # true advance width at quiver's slice font size. Headless skips this entirely,
+  # so the char-metric fallback drives CI.
+  app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
+
+  paint_frame(&var win, &var app)
 
   var running = true
   while running
     match win.poll_event
       Some(ev) -> match ev
-        Event.PointerDown(x, y) -> app.pointer_down(x, y)
+        # canvas delivers Float32 sub-pixel coords; quiver's design space is
+        # whole Ints, so the shell quantizes at this seam (the one cast site).
+        Event.PointerDown(x, y) -> app.pointer_down(x as Int, y as Int)
+        Event.PointerMove(x, y) -> app.pointer_move(x as Int, y as Int)
+        Event.PointerUp(x, y)   -> app.pointer_up(x as Int, y as Int)
+        Event.TextInput(cp)     -> app.text_input(cp)   # printable chars insert here
+        Event.KeyDown(k)        -> app.key_down(k)        # control-only: edit / caret
+        Event.Scroll(dx, dy)    -> app.scroll(dx as Int, dy as Int)
+        Event.Resize(ww, hh)    -> app.resize(ww as Int, hh as Int)
         Event.CloseRequested    -> running = false
-        Event.PointerMove(x, y) -> nil
-        Event.PointerUp(x, y)   -> nil
-        Event.KeyDown(k)        -> nil
-        Event.Resize(ww, hh)    -> nil
+        _                       -> nil
       end
       nil -> nil
     end
     let dirty = app.flush
     if (dirty.size as Int) > 0
-      surface.reset
-      paint_all(&app, &var surface)
-      blit(&var win, &surface)
+      paint_frame(&var win, &var app)
     end
     win.sleep_ms(16)
   end
   win.hide
-end
-
-## Draw the recorded frame to the OS window: begin a frame, replay onto the
-## canvas, end the frame, and present.
-def blit(win: &var Window, surface: &RecordingSurface) -> nil
-  match win.canvas.begin_frame
-    Ok(_)  -> nil
-    Err(e) -> puts "begin_frame: #{e}"
-  end
-  replay(surface, &var win.canvas)
-  let _ = win.canvas.end_frame
-  let _ = win.present
 end
 
 ## Single-statement match-arm helper: report the headless fallback, yield false.

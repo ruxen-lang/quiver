@@ -1,0 +1,107 @@
+# Pins the injected text-metric seam (docs/decisions/text-metrics-seam.md):
+# `App.set_measure({ |text, size| Int })` replaces the char-metric width
+# estimate with REAL (shell-injected) advance widths, so layout geometry — and
+# the hit-testing that reads that same geometry — reflect the injected metric.
+#
+# The fake measure here is `{ |t, s| (t.size) * 7 }`: 7px per char, vs the
+# char-metric default of `char_width()` (8) per char. Quiver stays canvas-free —
+# these tests inject only a FAKE closure, never a canvas symbol.
+use std.sync.{Mutex, SharedSync}
+
+Tester.describe("Real text metrics — the injected measure seam") do |t: &var Tester|
+  let widgets = { || App.build(do |ui: &var Ui, root: &var Col|
+        let agree = ui.state_bool(false)
+        root.text("Counter")
+        root.button("tap", { |ui2| nil })
+        root.checkbox(agree, "ok")
+      end) }
+  let fake7 = { |s: String| s.size as Int * 7 }
+  t.it("default (no measure injected): char-metric widths, unchanged") do ||
+    var app = widgets.()
+    t.expect(app.measuring?).to_eq(false)
+    t.expect(app.w_of(0)).to_eq(7 * char_width() + pad_x() * 2)
+    t.expect(app.w_of(1)).to_eq(3 * char_width() + pad_x() * 2)
+  end
+  t.it("injected fake measure changes leaf + button width as the fake predicts") do ||
+    var app = widgets.()
+    app.set_measure({ |txt: String, sz: Int| fake7.(txt) })
+    t.expect(app.measuring?).to_eq(true)
+    t.expect(app.w_of(0)).to_eq(7 * 7 + pad_x() * 2)
+    t.expect(app.w_of(1)).to_eq(3 * 7 + pad_x() * 2)
+  end
+  t.it("checkbox label is measured too (box + measured label + pads)") do ||
+    var app = widgets.()
+    app.set_measure({ |txt: String, sz: Int| fake7.(txt) })
+    t.expect(app.w_of(2)).to_eq(pad_x() + check_box_size() + pad_x() + 2 * 7 + pad_x())
+  end
+  t.it("the slice font size is passed through to the measure fn") do ||
+    var app = widgets.()
+    let seen: SharedSync[Mutex[Int]] = SharedSync.new(Mutex.new(-1))
+    app.set_measure(do |txt: String, sz: Int|
+        let m = seen.get
+        let g = m.lock_raw
+        g.set(sz)
+        txt.size as Int * 7
+      end)
+    let m = seen.get
+    let g = m.lock_raw
+    t.expect(g.get).to_eq(text_size())
+  end
+  t.it("a dyn_text change RE-MEASURES on flush (new string, new width)") do ||
+    var app = App.build(do |ui: &var Ui, root: &var Col|
+          let count = ui.state(8)
+          root.dyn_text({ |ui2| "n=#{count.get(ui2)}" })
+          root.button("inc", { |ui2| count.update(ui2, { |c| c + 100 }) })
+        end)
+    app.set_measure({ |txt: String, sz: Int| txt.size as Int * 7 })
+    t.expect(app.w_of(0)).to_eq(3 * 7 + pad_x() * 2)
+    app.click(1)
+    app.flush
+    t.expect(app.text_of(0)).to_eq("n=108")
+    t.expect(app.w_of(0)).to_eq(5 * 7 + pad_x() * 2)
+  end
+  let mixed_row = { || App.build({ |ui: &var Ui, root: &var Col| root.row(do |c: &var Col|
+          c.button("aa", { |ui2| nil })
+          c.button("cccc", { |ui2| nil })
+        end) }) }
+  t.it("a row of measured widths lays out AND hit-tests on the measured boxes") do ||
+    var app = mixed_row.()
+    app.set_measure({ |txt: String, sz: Int| txt.size as Int * 7 })
+    let w_aa = 2 * 7 + pad_x() * 2
+    t.expect(app.x_of(1)).to_eq(0)
+    t.expect(app.x_of(2)).to_eq(w_aa)
+    t.expect(app.hit_test(w_aa + 1, 2)).to_eq(2)
+    t.expect(app.hit_test(1, 2)).to_eq(1)
+  end
+  t.it("OPTIMIZER: measure runs ONCE PER LEAF PER arrange, not per flush") do ||
+    let calls: SharedSync[Mutex[Int]] = SharedSync.new(Mutex.new(0))
+    var app = App.build(do |ui: &var Ui, root: &var Col|
+          let count = ui.state(0)
+          root.text("static")
+          root.dyn_text({ |ui2| "n=#{count.get(ui2)}" })
+          root.button("inc", { |ui2| count.update(ui2, { |c| c + 1 }) })
+        end)
+    app.set_measure(do |txt: String, sz: Int|
+        let m = calls.get
+        let g = m.lock_raw
+        g.set(g.get + 1)
+        txt.size as Int * 7
+      end)
+    let after_set = do ||
+        let m = calls.get
+        let g = m.lock_raw
+        g.get
+      end
+    t.expect(after_set.()).to_eq(3)
+    app.click(2)
+    app.flush
+    t.expect(after_set.()).to_eq(6)
+    app.flush
+    t.expect(after_set.()).to_eq(6)
+  end
+  t.it("un-setting is impossible by design; default app never measures") do ||
+    var app = widgets.()
+    t.expect(app.measuring?).to_eq(false)
+    t.expect(app.w_of(0)).to_eq(7 * char_width() + pad_x() * 2)
+  end
+end

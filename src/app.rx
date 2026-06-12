@@ -6,27 +6,211 @@
 ## Tracking scopes ARE node ids in this slice: reactive text node `i` is
 ## tracking scope `i`, so `Ui.dirty` is directly the set of nodes whose
 ## text must be recomputed (and repainted).
-
 ## Layout constants (device-independent pixels; one bitmap-ish font for the
 ## slice — real text metrics arrive with canvas's Skia text stack).
 def row_height -> Int { 24 }
+
 def char_width -> Int { 8 }
+
 def pad_x -> Int { 4 }
+
 def baseline_drop -> Int { 16 }
+
+## Logical font size (px) quiver renders text at for this slice — one font for
+## the whole slice. Passed to an injected real-metrics measure fn so its advance
+## width matches what the shell actually paints (canvas's Skia text at this size).
+def text_size -> Int { 16 }
+
+## Checkbox box side (a square, smaller than the row so it sits inset).
+def check_box_size -> Int { 16 }
+
+## Slider thumb side (a square) and track bar height. The track is inset by
+## `slider_thumb/2` on each end so the thumb center stays inside the box.
+def slider_thumb -> Int { 12 }
+
+def slider_track_h -> Int { 6 }
+
+## Control key codes for `App.key_down`. canvas's `Event.KeyDown` is CONTROL-ONLY
+## (no characters — those arrive as `text_input`), and these are the actual
+## platform keycodes it delivers, so the windowed shell passes them straight
+## through (no remapping needed). Printable text never comes through `key_down`.
+def key_backspace -> Int { 8 }
+
+def key_delete -> Int { 127 }
+
+def key_left -> Int { 1073741904 }
+
+def key_right -> Int { 1073741903 }
+
+def key_home -> Int { 1073741898 }
+
+def key_end -> Int { 1073741901 }
+
+## SDL up/down arrows — caret line navigation in a multi-line `textarea` (F3).
+def key_up -> Int { 1073741906 }
+
+def key_down_arrow -> Int { 1073741905 }
+
+## --- F2 gesture/fling tuning (docs/LAYOUT.md F2) ---
+## Fling decay numerator/denominator per `tick`: velocity *= num/den each step
+## (≈ 0.92). Integer ratio so stepping is deterministic under the fake clock.
+def fling_decay_num -> Int { 92 }
+
+def fling_decay_den -> Int { 100 }
+
+## Fling stops when |velocity| drops below this (px per tick).
+def fling_min_v -> Int { 1 }
+
+## Long-press fires when the pointer is held at least this many clock units
+## without moving past the slop radius.
+def long_press_ms -> Int { 500 }
+
+## Tap/long-press movement slop (px): a pointer move farther than this from the
+## press point cancels the long-press (it becomes a drag).
+def gesture_slop -> Int { 6 }
+
+## Scrollbar thumb width (px) and minimum thumb length (px) — paint-only (F2).
+def scrollbar_w -> Int { 4 }
+
+def scrollbar_min_thumb -> Int { 12 }
+
+## --- F3 text-editing tuning (docs/decisions/text-editing.md) ---
+## Undo coalescing window: edits within this many clock units of the previous
+## one fold into a single undo entry (rapid typing = one undo). 0 disables
+## coalescing (every edit is its own entry).
+def undo_group_ms -> Int { 400 }
+
+## Marked (IME composition) underline thickness (px) drawn beneath marked text.
+def ime_underline_h -> Int { 2 }
+
+## --- F4 animation (docs/decisions/animation.md) ---
+## Curve progress is fixed-point per-mille: p, eased ∈ [0, ANIM_SCALE]. Int-only
+## math (quiver's design space is Int) — no Float, fully deterministic.
+def anim_scale -> Int { 1000 }
+
+## Easing curves (plain Int constants, the node-kind idiom).
+def curve_linear -> Int { 0 }
+
+def curve_ease_in -> Int { 1 }
+
+def curve_ease_out -> Int { 2 }
+
+def curve_ease_in_out -> Int { 3 }
+
+## Animated property channels — each a SCALAR Int lerp row in the registry. A
+## colour tween is three rows (r/g/b); an offset tween is one or two (x/y).
+def prop_off_x -> Int { 0 }
+
+def prop_off_y -> Int { 1 }
+
+def prop_col_r -> Int { 2 }
+
+def prop_col_g -> Int { 3 }
+
+def prop_col_b -> Int { 4 }
+
+## Map progress `p` ∈ [0, anim_scale] through easing `curve` → eased ∈ [0,
+## anim_scale]. Quadratic ease in/out; cubic-ish smoothness is deferred. All Int
+## fixed-point: worst-case rounding < 1 unit, and the caller clamps to the end
+## value on retirement so a finished tween lands byte-exact.
+def ease(curve: Int, p: Int) -> Int
+  var q = p
+  if q < 0
+    q = 0
+  end
+  if q > anim_scale()
+    q = anim_scale()
+  end
+  if curve == curve_ease_in()
+    return q * q / anim_scale()
+  end
+  if curve == curve_ease_out()
+    let inv = anim_scale() - q
+    return anim_scale() - inv * inv / anim_scale()
+  end
+  if curve == curve_ease_in_out()
+    if q < anim_scale() / 2
+      return 2 * q * q / anim_scale()
+    end
+    let inv = anim_scale() - q
+    return anim_scale() - 2 * inv * inv / anim_scale()
+  end
+  q
+end
+
+## Lerp `from`→`to` at eased progress `e` ∈ [0, anim_scale]: from + (to-from)*e/scale.
+def anim_lerp(from: Int, to: Int, e: Int) -> Int { from + (to - from) * e / anim_scale() }
 
 class App
   ui: Ui
   root: Col
-  ## node id -> current reactive text (static nodes are read from labels).
   cache: Hash[Int, String]
-  ## Geometry per node id, written by `layout`.
   geom_x: Hash[Int, Int]
   geom_y: Hash[Int, Int]
   geom_w: Hash[Int, Int]
   geom_h: Hash[Int, Int]
-  ## Widest row ever laid out (monotonic). paint_dirty erases this full
-  ## span so a shrinking label can never leave ghost pixels behind.
   span_w: Int
+  scroll: Hash[Int, Int]
+  content_h: Hash[Int, Int]
+  focused: Int
+  caret: Hash[Int, Int]
+  anchor: Hash[Int, Int]
+  caret_drag: Int
+  clip_get_fns: Array[any Fn[Fn() -> String]]
+  clip_set_fns: Array[any Fn[Fn(String) -> nil]]
+  has_clipboard: Bool
+  mark_text: Hash[Int, String]
+  mark_start: Hash[Int, Int]
+  mark_len: Hash[Int, Int]
+  undo_vals: Hash[Int, Array[String]]
+  undo_carets: Hash[Int, Array[Int]]
+  redo_vals: Hash[Int, Array[String]]
+  redo_carets: Hash[Int, Array[Int]]
+  undo_last_time: Hash[Int, Int]
+  captured: Int
+  overlay_owner: Int
+  overlay_x: Int
+  overlay_y: Int
+  hover_x: Int
+  hover_y: Int
+  hovered: Bool
+  design_w: Int
+  design_h: Int
+  measure_fns: Array[any Fn[Fn(String, Int) -> Int]]
+  has_measure: Bool
+  scroll_line: Int
+  clock_fns: Array[any Fn[Fn() -> Int]]
+  has_clock: Bool
+  frame_counter: Int
+  fling_v: Hash[Int, Int]
+  drag_last_pos: Int
+  drag_last_time: Int
+  drag_v: Int
+  scroll_captured: Int
+  lp_node: Int
+  lp_time: Int
+  lp_x: Int
+  lp_y: Int
+  anim_count: Int
+  anim_node: Hash[Int, Int]
+  anim_prop: Hash[Int, Int]
+  anim_from: Hash[Int, Int]
+  anim_to: Hash[Int, Int]
+  anim_start: Hash[Int, Int]
+  anim_dur: Hash[Int, Int]
+  anim_curve: Hash[Int, Int]
+  anim_live: Hash[Int, Bool]
+  anim_cb: Hash[Int, Int]
+  anim_callbacks: Array[any Fn[Fn(&var Ui) -> nil]]
+  anim_off_x_of: Hash[Int, Int]
+  anim_off_y_of: Hash[Int, Int]
+  anim_col_r_of: Hash[Int, Int]
+  anim_col_g_of: Hash[Int, Int]
+  anim_col_b_of: Hash[Int, Int]
+  anim_has_col_of: Hash[Int, Bool]
+  trans_col_of: Hash[Int, Int]
+  trans_col_dur_of: Hash[Int, Int]
+  trans_col_curve_of: Hash[Int, Int]
 
   def init
     self.ui = Ui.new
@@ -37,6 +221,67 @@ class App
     self.geom_w = Hash.new
     self.geom_h = Hash.new
     self.span_w = 0
+    self.scroll = Hash.new
+    self.content_h = Hash.new
+    self.focused = -1
+    self.caret = Hash.new
+    self.anchor = Hash.new
+    self.caret_drag = -1
+    self.clip_get_fns = Array.new
+    self.clip_set_fns = Array.new
+    self.has_clipboard = false
+    self.mark_text = Hash.new
+    self.mark_start = Hash.new
+    self.mark_len = Hash.new
+    self.undo_vals = Hash.new
+    self.undo_carets = Hash.new
+    self.redo_vals = Hash.new
+    self.redo_carets = Hash.new
+    self.undo_last_time = Hash.new
+    self.captured = -1
+    self.overlay_owner = -1
+    self.overlay_x = 0
+    self.overlay_y = 0
+    self.hover_x = 0
+    self.hover_y = 0
+    self.hovered = false
+    self.design_w = 0
+    self.design_h = 0
+    self.measure_fns = Array.new
+    self.has_measure = false
+    self.scroll_line = row_height()
+    self.clock_fns = Array.new
+    self.has_clock = false
+    self.frame_counter = 0
+    self.fling_v = Hash.new
+    self.drag_last_pos = 0
+    self.drag_last_time = 0
+    self.drag_v = 0
+    self.scroll_captured = -1
+    self.lp_node = -1
+    self.lp_time = 0
+    self.lp_x = 0
+    self.lp_y = 0
+    self.anim_count = 0
+    self.anim_node = Hash.new
+    self.anim_prop = Hash.new
+    self.anim_from = Hash.new
+    self.anim_to = Hash.new
+    self.anim_start = Hash.new
+    self.anim_dur = Hash.new
+    self.anim_curve = Hash.new
+    self.anim_live = Hash.new
+    self.anim_cb = Hash.new
+    self.anim_callbacks = Array.new
+    self.anim_off_x_of = Hash.new
+    self.anim_off_y_of = Hash.new
+    self.anim_col_r_of = Hash.new
+    self.anim_col_g_of = Hash.new
+    self.anim_col_b_of = Hash.new
+    self.anim_has_col_of = Hash.new
+    self.trans_col_of = Hash.new
+    self.trans_col_dur_of = Hash.new
+    self.trans_col_curve_of = Hash.new
   end
 
   ## Build an app: run the user's block once to construct the tree, then
@@ -45,12 +290,22 @@ class App
   ##   var app = App.build({ |ui: &var Ui, root: &var Col|
   ##     let count = ui.state(0)
   ##     root.text("Counter")
-  ##     root.dyn_text({ |ui2: &var Ui| "count: #{count.get(ui2)}" })
-  ##     root.button("tap", { |ui2: &var Ui| count.update(ui2, { |c| c + 1 }) })
+  ##     root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })
+  ##     root.button("tap", { |ui2| count.update(ui2, { |c| c + 1 }) })
   ##   })
+  ##
+  ## This is the ONE builder that stays an explicit closure param rather than a
+  ## `&block` + `yield`: the block takes TWO `&var` references (`&var Ui`, `&var
+  ## Col`), and a `yield` with two `&var` reference arguments to fields of the
+  ## same object miscompiles on the v1 toolchain (the block builds into an empty
+  ## `Col`) — see the "two-&var-arg yield" landmine in CLAUDE.md / ruxen ledger
+  ## Q35. The closure-call form below (`f.(&var app.ui, &var app.root)`) is
+  ## sound. The OUTER block also keeps its `|ui: &var Ui, root: &var Col|` param
+  ## types — they are not inferred for this entry block (a ruxen inference gap).
   def self.build(f: any Fn[Fn(&var Ui, &var Col) -> nil]) -> App
     var app = App.new
-    f.(&var app.ui, &var app.root)
+    f.(&var app.ui,
+    &var app.root)
     app.mount
     app.arrange
     app
@@ -67,21 +322,55 @@ class App
     end
   end
 
-  ## Re-run the tracking scope of node `i` (no-op for static nodes).
+  ## Re-run the tracking scope of node `i` (no-op for static nodes). For a
+  ## reactive list (`list_of`), re-running its compute re-subscribes it to the
+  ## model version; then we REBUILD its child subtree from the current model and
+  ## mount the fresh rows (run their computes once). This is the structural-
+  ## reactivity path — docs/decisions/structural-reactivity.md.
   def var refresh_node(i: Int) -> nil
+    if self.root.list_of_at(i)
+      self.refresh_list_of(i)
+      return
+    end
     let ci = self.root.compute_at(i)
     if ci >= 0
       self.ui.unsubscribe_scope(i)
       self.ui.current_scope = i
       match self.root.computes.get(ci)
         Some(f) -> self.cache.insert(i, f.(&var self.ui))
-        nil     -> nil
+        nil -> nil
       end
       self.ui.current_scope = -1
     end
   end
 
+  ## Refresh a reactive list: (re)subscribe its scope to the model version (so a
+  ## later mutation re-dirties it), then rebuild its child subtree from the
+  ## current model and mount the fresh rows.
+  def var refresh_list_of(i: Int) -> nil
+    self.ui.unsubscribe_scope(i)
+    self.ui.current_scope = i
+    self.root.subscribe_model(i, &var self.ui)
+    self.ui.current_scope = -1
+    self.rebuild_list(i)
+  end
+
+  ## Rebuild reactive-list `i`'s children from its model, then mount the new
+  ## rows (run any per-row computes once so they cache + subscribe).
+  def var rebuild_list(i: Int) -> nil
+    let before = self.root.size
+    self.root.build_items(i)
+    var j = before
+    let after = self.root.size
+    while j < after
+      self.refresh_node(j)
+      j = j + 1
+    end
+  end
+
   ## Current display text of node `i`: reactive cache, else static label.
+  ## Only `dyn_text` nodes are ever cached; a cache miss means "static" — fall
+  ## through to the label.
   def text_of(i: Int) -> String
     if let Some(s) = self.cache.get(i)
       return s.clone
@@ -110,68 +399,1908 @@ class App
     if hi >= 0
       match self.root.handlers.get(hi)
         Some(f) -> f.(&var self.ui)
-        nil     -> nil
+        nil -> nil
       end
     end
   end
 
-  ## Column layout: stack nodes top to bottom, one row each. Buttons get a
-  ## label-sized box; text nodes span their text width.
+  ## Own-flex layout pass (docs/LAYOUT.md): walk the nested arena and write
+  ## absolute geometry for every node. The top level is an implicit column —
+  ## roots stack on Y at x=0. Each container places its children along its
+  ## axis (`Col` = Y, `Row` = X) at their intrinsic main-axis sizes; leaves
+  ## span their text width by one row. Two phases per subtree: measure
+  ## (intrinsic size) then place (absolute position).
   def var arrange -> nil
+    self.measure_leaves
+    var node = self.root.root_head
+    var y = 0
+    while node >= 0
+      let h = self.measure_h(node)
+      self.place_node(node, 0, y)
+      y = y + h
+      node = self.root.next_sibling_of(node)
+    end
+  end
+
+  ## FLAT pre-pass: resolve every leaf's intrinsic text width ONCE (a single
+  ## `text_of` per node) and stash it on the arena via `Col.push_iw`. The
+  ## recursive measure/place then reads it back with `self.root.iw_of`,
+  ## re-measuring nothing. Keeping this the *only* place `text_of`/`self.cache`
+  ## is touched during layout also keeps the empty-cache guard (Q25) in one
+  ## spot rather than on every recursive width query.
+  def var measure_leaves -> nil
+    self.root.reset_iw
     var i = 0
     let n = self.root.size
-    var y = 0
     while i < n
-      let label = self.text_of(i)
-      let w = (label.size as Int) * char_width() + pad_x() * 2
-      self.geom_x.insert(i, 0)
-      self.geom_y.insert(i, y)
-      self.geom_w.insert(i, w)
-      self.geom_h.insert(i, row_height())
-      if w > self.span_w
-        self.span_w = w
+      if self.root.container_at(i)
+        self.root.push_iw(0)
+      elsif self.root.input_at(i)
+        self.root.push_iw(self.root.input_width_at(i))
+      elsif self.root.checkbox_at(i)
+        self.root.push_iw(self.checkbox_w(i))
+      elsif self.root.slider_at(i)
+        self.root.push_iw(self.root.slider_width_at(i))
+      elsif self.root.select_at(i)
+        self.root.push_iw(self.root.select_width_at(i))
+      else
+        self.root.push_iw(self.leaf_w(i))
       end
-      y = y + row_height()
       i = i + 1
     end
   end
 
-  def x_of(i: Int) -> Int { self.geom_lookup(&self.geom_x, i) }
-  def y_of(i: Int) -> Int { self.geom_lookup(&self.geom_y, i) }
-  def w_of(i: Int) -> Int { self.geom_lookup(&self.geom_w, i) }
-  def h_of(i: Int) -> Int { self.geom_lookup(&self.geom_h, i) }
+  ## True when container `i`'s MAIN axis is X — a `row`, or a HORIZONTAL list
+  ## (`hlist`). Every other container (col / stack / vertical list / list_of)
+  ## stacks on Y.
+  def main_is_x(i: Int) -> Bool
+    self.root.kind_at(i) == kind_row() || self.root.list_at(i) && self.root.horizontal_at(i)
+  end
 
-  ## Topmost interactive node containing (x, y), or -1.
-  def hit_test(x: Int, y: Int) -> Int
-    var i = 0
-    let n = self.root.size
-    while i < n
-      if self.root.handler_at(i) >= 0
-        if self.contains(i, x, y)
-          return i
-        end
+  ## True when list `i` scrolls horizontally (an `hlist`).
+  def hlist_at(i: Int) -> Bool { self.root.list_at(i) && self.root.horizontal_at(i) }
+
+  ## Number of children of container `i` (for gap accounting).
+  def child_count(i: Int) -> Int
+    var n = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      n = n + 1
+      c = self.root.next_sibling_of(c)
+    end
+    n
+  end
+
+  ## Intrinsic width of node `i` (its content size, before any parent grow).
+  ##   leaf            -> its pre-measured text width
+  ##   Row             -> sum of children widths + gaps + pad_l + pad_r
+  ##   Col/Stack/List  -> max of children widths        + pad_l + pad_r
+  ## (A Row is the only container that SUMS on X; gap adds (n-1)*gap on the
+  ## summing axis only. Stack maxes on both axes — children overlap.)
+  def measure_w(i: Int) -> Int
+    if !self.root.container_at(i)
+      return self.root.iw_of(i)
+    end
+    if self.hlist_at(i)
+      return self.root.viewport_at(i)
+    end
+    var total = 0
+    var maxw = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      let cw = self.measure_w(c)
+      total = total + cw
+      if cw > maxw
+        maxw = cw
       end
-      i = i + 1
+      c = self.root.next_sibling_of(c)
+    end
+    var inner = maxw
+    if self.main_is_x(i)
+      inner = total + self.gap_total(i)
+    end
+    inner + self.root.pad_l_at(i) + self.root.pad_r_at(i)
+  end
+
+  ## Intrinsic height of node `i`. A List is the exception — its box is its
+  ## FIXED viewport height, not the content extent.
+  ##   leaf            -> one row
+  ##   Col             -> sum of children heights + gaps + pad_t + pad_b
+  ##   Row/Stack       -> max of children heights        + pad_t + pad_b
+  ##   List/ListOf     -> its fixed viewport height
+  def measure_h(i: Int) -> Int
+    if self.root.list_at(i) && !self.root.horizontal_at(i)
+      return self.root.viewport_at(i)
+    end
+    if self.root.multiline_at(i)
+      return self.root.rows_at(i) * row_height()
+    end
+    if !self.root.container_at(i)
+      return row_height()
+    end
+    var total = 0
+    var maxh = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      let ch = self.measure_h(c)
+      total = total + ch
+      if ch > maxh
+        maxh = ch
+      end
+      c = self.root.next_sibling_of(c)
+    end
+    var inner = maxh
+    if !self.main_is_x(i) && !self.root.stack_at(i)
+      inner = total + self.gap_total(i)
+    end
+    inner + self.root.pad_t_at(i) + self.root.pad_b_at(i)
+  end
+
+  ## Total main-axis gap inside container `i`: (children − 1) * gap, clamped ≥ 0.
+  def gap_total(i: Int) -> Int
+    let g = self.root.gap_at(i)
+    if g <= 0
+      return 0
+    end
+    let n = self.child_count(i)
+    if n <= 1
+      return 0
+    end
+    (n - 1) * g
+  end
+
+  ## Sum of a list's children along its SCROLL axis (plus inter-child gap) — the
+  ## scrollable content extent, used to clamp the offset and size the scrollbar.
+  ## Heights for a vertical list, widths for a horizontal (`hlist`) one. (A list
+  ## does not grow to this; its box is the viewport.)
+  def content_height(i: Int) -> Int
+    let is_h = self.root.horizontal_at(i)
+    var total = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      if is_h
+        total = total + self.measure_w(c)
+      else
+        total = total + self.measure_h(c)
+      end
+      c = self.root.next_sibling_of(c)
+    end
+    total + self.gap_total(i)
+  end
+
+  ## Place node `i` (and its subtree) with its top-left at (x, y), sizing it to
+  ## its INTRINSIC size. The convenience entry; `place_node_sized` is used when a
+  ## parent has resized the child (grow / cross-stretch).
+  def var place_node(i: Int, x: Int, y: Int) -> nil
+    self.place_node_sized(i, x, y, self.measure_w(i), self.measure_h(i))
+  end
+
+  ## Place node `i` at (x, y) with an EXPLICIT box size (w, h) — the parent may
+  ## have grown it on the main axis or stretched it on the cross axis. Writes the
+  ## geom, then lays its children inside this box.
+  def var place_node_sized(i: Int, x: Int, y: Int, w: Int, h: Int) -> nil
+    self.geom_x.insert(i, x)
+    self.geom_y.insert(i, y)
+    self.geom_w.insert(i, w)
+    self.geom_h.insert(i, h)
+    if x + w > self.span_w
+      self.span_w = x + w
+    end
+    if self.root.container_at(i)
+      if self.root.stack_at(i)
+        self.place_stack_children(i, x, y, w, h)
+      else
+        self.place_children(i, x, y, w, h)
+      end
+    end
+  end
+
+  ## Lay out the children of a LINEAR container `i` (row / col / list / list_of)
+  ## inside its box `(x, y, w, h)`. Honors per-side padding, gap, grow (main-axis
+  ## leftover distributed by weight), justify (main-axis distribution of any
+  ## remaining leftover), and align (cross-axis placement, incl. stretch).
+  ##
+  ## A List lays its children out in CONTENT space (offset-free, natural
+  ## positions); the scroll offset is applied at PAINT time. The list records its
+  ## content height for clamping the offset. Grow/justify are inert for a list on
+  ## its main (Y) axis — its content is its natural extent, not the viewport.
+  def var place_children(i: Int, x: Int, y: Int, w: Int, h: Int) -> nil
+    let is_row = self.main_is_x(i)
+    let pl = self.root.pad_l_at(i)
+    let pt = self.root.pad_t_at(i)
+    let inner_x = x + pl
+    let inner_y = y + pt
+    let inner_w = w - pl - self.root.pad_r_at(i)
+    let inner_h = h - pt - self.root.pad_b_at(i)
+    let gap = self.root.gap_at(i)
+    let is_list = self.root.list_at(i)
+    if is_list
+      self.content_h.insert(i, self.content_height(i))
+    end
+    let main_extent = self.children_main_extent(i, is_row)
+    let inner_main = self.pick(is_row, inner_w, inner_h)
+    var leftover = 0
+    if !is_list
+      leftover = inner_main - main_extent - self.gap_total(i)
+      if leftover < 0
+        leftover = 0
+      end
+    end
+    let grow_total = self.children_grow_total(i)
+    var lead = 0
+    var extra_gap = 0
+    if grow_total <= 0
+      lead = self.justify_lead(i, leftover)
+      extra_gap = self.justify_extra_gap(i, leftover)
+    end
+    var cursor = self.pick(is_row, inner_x, inner_y) + lead
+    var grown_remaining = grow_total
+    var grow_left = leftover
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      let cm = self.child_main(c, is_row)
+      var main_size = cm
+      let g = self.root.grow_at(c)
+      if grow_total > 0 && g > 0
+        let share = grow_left * g / grown_remaining
+        main_size = cm + share
+        grow_left = grow_left - share
+        grown_remaining = grown_remaining - g
+      end
+      self.place_linear_child(i, c, is_row, cursor, inner_x, inner_y, inner_w, inner_h, main_size)
+      cursor = cursor + main_size + gap + extra_gap
+      c = self.root.next_sibling_of(c)
+    end
+  end
+
+  ## Place one linear child `c` of container `i`: main-axis position = `cursor`,
+  ## main-axis size = `main_size` (intrinsic or grown), cross-axis position +
+  ## size from `align`. `(inner_x, inner_y, inner_w, inner_h)` is the padded box.
+  def var place_linear_child(
+    i: Int,
+    c: Int,
+    is_row: Bool,
+    cursor: Int,
+    inner_x: Int,
+    inner_y: Int,
+    inner_w: Int,
+    inner_h: Int,
+    main_size: Int,
+  ) -> nil
+    let cross_extent = self.pick(is_row, inner_h, inner_w)
+    let child_cross = self.child_cross(c, is_row)
+    let cross_off = self.align_cross_offset(i, child_cross, cross_extent)
+    var cross_size = child_cross
+    if self.root.align_at(i) == align_stretch()
+      cross_size = cross_extent
+    end
+    if is_row
+      let cy = inner_y + cross_off
+      self.place_node_sized(c, cursor, cy, main_size, cross_size)
+    else
+      let cx = inner_x + cross_off
+      self.place_node_sized(c, cx, cursor, cross_size, main_size)
+    end
+  end
+
+  ## Lay out the children of a `stack` container `i`: every child occupies the
+  ## stack box at the padded origin plus its own `offset(left, top)`, at the
+  ## child's intrinsic size. Build order = z-order (paint bottom→top; hit-test
+  ## reverses).
+  def var place_stack_children(i: Int, x: Int, y: Int, w: Int, h: Int) -> nil
+    let ox = x + self.root.pad_l_at(i)
+    let oy = y + self.root.pad_t_at(i)
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      self.place_node(c, ox + self.root.offset_l_at(c), oy + self.root.offset_t_at(c))
+      c = self.root.next_sibling_of(c)
+    end
+  end
+
+  ## Sum of container `i`'s children's main-axis intrinsic sizes.
+  def children_main_extent(i: Int, is_row: Bool) -> Int
+    var total = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      total = total + self.child_main(c, is_row)
+      c = self.root.next_sibling_of(c)
+    end
+    total
+  end
+
+  ## Sum of container `i`'s children's grow weights.
+  def children_grow_total(i: Int) -> Int
+    var total = 0
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      total = total + self.root.grow_at(c)
+      c = self.root.next_sibling_of(c)
+    end
+    total
+  end
+
+  ## Intrinsic main-axis size of node `c` given the parent's axis.
+  def child_main(c: Int, is_row: Bool) -> Int
+    if is_row
+      return self.measure_w(c)
+    end
+    self.measure_h(c)
+  end
+
+  ## Intrinsic cross-axis size of node `c` given the parent's axis.
+  def child_cross(c: Int, is_row: Bool) -> Int
+    if is_row
+      return self.measure_h(c)
+    end
+    self.measure_w(c)
+  end
+
+  ## Pick `a` when `cond`, else `b` (axis selector helper).
+  def pick(cond: Bool, a: Int, b: Int) -> Int
+    if cond
+      return a
+    end
+    b
+  end
+
+  ## Leading main-axis offset for container `i`'s `justify` over `leftover`.
+  def justify_lead(i: Int, leftover: Int) -> Int
+    if leftover <= 0
+      return 0
+    end
+    let j = self.root.justify_at(i)
+    if j == just_center()
+      return leftover / 2
+    end
+    if j == just_end()
+      return leftover
+    end
+    if j == just_space_around()
+      let n = self.child_count(i)
+      if n > 0
+        return leftover / n / 2
+      end
+    end
+    0
+  end
+
+  ## Extra inter-child gap for container `i`'s `justify` over `leftover`
+  ## (space_between / space_around spread the remaining space between children).
+  def justify_extra_gap(i: Int, leftover: Int) -> Int
+    if leftover <= 0
+      return 0
+    end
+    let j = self.root.justify_at(i)
+    let n = self.child_count(i)
+    if j == just_space_between() && n > 1
+      return leftover / (n - 1)
+    end
+    if j == just_space_around() && n > 0
+      return leftover / n
+    end
+    0
+  end
+
+  ## Cross-axis offset for a child of size `child_cross` within `cross_extent`
+  ## per container `i`'s `align` (stretch is handled by resizing, not offset).
+  def align_cross_offset(i: Int, child_cross: Int, cross_extent: Int) -> Int
+    let a = self.root.align_at(i)
+    let slack = cross_extent - child_cross
+    if slack <= 0
+      return 0
+    end
+    if a == align_center()
+      return slack / 2
+    end
+    if a == align_end()
+      return slack
+    end
+    0
+  end
+
+  def x_of(i: Int) -> Int
+    match self.geom_x.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def y_of(i: Int) -> Int
+    match self.geom_y.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def w_of(i: Int) -> Int
+    match self.geom_w.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def h_of(i: Int) -> Int
+    match self.geom_h.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Thumb center x (screen/content space) for slider `i` at its current value:
+  ##   track_left + (value - min) * track_w / (max - min)
+  ## where track_left = x + thumb/2 and track_w = width - thumb. Used by paint.
+  def slider_thumb_center_x(i: Int) -> Int
+    let span = self.root.slider_max_at(i) - self.root.slider_min_at(i)
+    let track_left = self.x_of(i) + slider_thumb() / 2
+    if span <= 0
+      return track_left
+    end
+    let track_w = self.root.slider_width_at(i) - slider_thumb()
+    let rel = self.slider_value(i) - self.root.slider_min_at(i)
+    track_left + rel * track_w / span
+  end
+
+  ## Current scroll offset of list `i` (0 if unscrolled / not a list).
+  def scroll_of(i: Int) -> Int
+    match self.scroll.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Laid-out content height of list `i` (sum of child heights), 0 if absent.
+  def content_height_of(i: Int) -> Int
+    match self.content_h.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## --- Scrollbar geometry (paint-only; docs/LAYOUT.md F2) ---
+  ## Whether list `i`'s content overflows its viewport (so a scrollbar shows).
+  def scrollbar_visible?(i: Int) -> Bool { self.content_height_of(i) > self.root.viewport_at(i) }
+
+  ## Scrollbar thumb LENGTH (px) along list `i`'s scroll axis:
+  ## `viewport * viewport / content`, clamped to a minimum so a long list still
+  ## has a grabbable thumb. 0 when not overflowing. (`viewport_at` is the
+  ## scroll-axis extent — height for a vlist, width for an hlist — so this is
+  ## axis-agnostic.) `scrollbar_thumb_h` is the vertical name kept for back-compat.
+  def scrollbar_thumb_h(i: Int) -> Int
+    if !self.scrollbar_visible?(i)
+      return 0
+    end
+    let vp = self.root.viewport_at(i)
+    let content = self.content_height_of(i)
+    var th = vp * vp / content
+    if th < scrollbar_min_thumb()
+      th = scrollbar_min_thumb()
+    end
+    if th > vp
+      th = vp
+    end
+    th
+  end
+
+  ## Scrollbar thumb POSITION (screen px) along list `i`'s scroll axis: the
+  ## viewport's start edge + `(viewport - thumb_len) * scroll / max_scroll`. The
+  ## start edge is `x_of` for an hlist, `y_of` for a vlist. `scrollbar_thumb_y` is
+  ## the vertical name kept for back-compat.
+  def scrollbar_thumb_y(i: Int) -> Int
+    let start = self.scrollbar_axis_start(i)
+    if !self.scrollbar_visible?(i)
+      return start
+    end
+    let vp = self.root.viewport_at(i)
+    let th = self.scrollbar_thumb_h(i)
+    let max_scroll = self.content_height_of(i) - vp
+    if max_scroll <= 0
+      return start
+    end
+    let travel = vp - th
+    start + travel * self.scroll_of(i) / max_scroll
+  end
+
+  ## The viewport's start edge along the scroll axis (x_of for hlist, y_of else).
+  def scrollbar_axis_start(i: Int) -> Int
+    if self.root.horizontal_at(i)
+      return self.x_of(i)
+    end
+    self.y_of(i)
+  end
+
+  ## Scroll list `i` to an absolute offset, clamped to [0, content - viewport],
+  ## then re-lay-out so the children's geometry reflects the new offset.
+  def var scroll_to(i: Int, offset: Int) -> nil
+    self.scroll.insert(i, self.clamp_scroll(i, offset))
+    self.arrange
+  end
+
+  ## Scroll list `i` by a delta (positive scrolls content up / further down the
+  ## list), clamped and re-laid-out.
+  def var scroll_by(i: Int, dy: Int) -> nil { self.scroll_to(i, self.scroll_of(i) + dy) }
+
+  ## Topmost interactive node (a button handler OR a focusable input) under the
+  ## SCREEN point (x, y), or -1. Mirrors the paint walk's transforms: descending
+  ## into a `List` adds its scroll offset to the accumulated content offset and
+  ## requires the point to be inside the list's viewport box (the clip), so a
+  ## click maps to the on-screen child and clicks outside a viewport hit none of
+  ## its children. Nested lists accumulate (sum offsets, intersect clips).
+  def hit_test(x: Int, y: Int) -> Int
+    var node = self.root.root_head
+    while node >= 0
+      let h = self.hit_tree(node, x, y, 0, 0)
+      if h >= 0
+        return h
+      end
+      node = self.root.next_sibling_of(node)
     end
     -1
   end
 
-  ## A pointer-down event from the engine: hit-test, run the handler.
-  ## Returns the node id that handled it, or -1.
+  ## Recursive hit-test for the subtree rooted at `i`. `(ox, oy)` is the
+  ## accumulated content offset: a screen point maps to THIS level's content
+  ## True when node `i` is interactive — a click handler, input, slider, select,
+  ## or a long-press handler — so `hit_test` should match it.
+  def interactive_at(i: Int) -> Bool
+    self.root.handler_at(i) >= 0 || self.root.input_at(i) || self.root.slider_at(i) ||
+    self.root.select_at(i) ||
+    self.root.long_press_at(i) >= 0
+  end
+
+  ## space as `(x + ox, y + oy)`. Returns the first interactive hit, or -1.
+  def hit_tree(i: Int, x: Int, y: Int, ox: Int, oy: Int) -> Int
+    let px = x + ox
+    let py = y + oy
+    if self.interactive_at(i)
+      if self.contains(i, px, py)
+        return i
+      end
+    end
+    if !self.root.container_at(i)
+      return -1
+    end
+    var cox = ox
+    var coy = oy
+    if self.root.list_at(i)
+      if !self.contains(i, px, py)
+        return -1
+      end
+      if self.root.horizontal_at(i)
+        cox = ox + self.scroll_of(i)
+      else
+        coy = oy + self.scroll_of(i)
+      end
+    end
+    if self.root.stack_at(i)
+      return self.hit_stack_children(i, x, y, cox, coy)
+    end
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      let h = self.hit_tree(c, x, y, cox, coy)
+      if h >= 0
+        return h
+      end
+      c = self.root.next_sibling_of(c)
+    end
+    -1
+  end
+
+  ## Hit-test a stack's children in REVERSE build order (topmost wins): collect
+  ## the forward child chain, then test last→first, returning the first hit.
+  def hit_stack_children(i: Int, x: Int, y: Int, ox: Int, oy: Int) -> Int
+    var kids: Array[Int] = Array.new
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      kids.push(c)
+      c = self.root.next_sibling_of(c)
+    end
+    var k = kids.size as Int - 1
+    while k >= 0
+      let child = match kids.get(k)
+          Some(v) -> *v
+          nil -> -1
+        end
+      if child >= 0
+        let h = self.hit_tree(child, x, y, ox, oy)
+        if h >= 0
+          return h
+        end
+      end
+      k = k - 1
+    end
+    -1
+  end
+
+  ## The INNERMOST scrollable list whose viewport contains screen point (x, y),
+  ## or -1. Walks the tree like `hit_tree` (accumulating each list's scroll
+  ## offset, clipping to its viewport box), and tracks the deepest list hit so a
+  ## wheel routes to the list directly under the pointer — including a list
+  ## nested inside another.
+  def list_under(x: Int, y: Int) -> Int
+    var best = -1
+    var node = self.root.root_head
+    while node >= 0
+      let h = self.list_under_tree(node, x, y, 0, 0, best)
+      if h >= 0
+        best = h
+      end
+      node = self.root.next_sibling_of(node)
+    end
+    best
+  end
+
+  ## Recursive helper: returns the deepest list containing the point in the
+  ## subtree at `i`, or the incoming `best`. `(ox, oy)` is the accumulated
+  ## content offset.
+  def list_under_tree(i: Int, x: Int, y: Int, ox: Int, oy: Int, best: Int) -> Int
+    let px = x + ox
+    let py = y + oy
+    if !self.root.container_at(i)
+      return best
+    end
+    var cox = ox
+    var coy = oy
+    var deepest = best
+    if self.root.list_at(i)
+      if !self.contains(i, px, py)
+        return best
+      end
+      deepest = i
+      if self.root.horizontal_at(i)
+        cox = ox + self.scroll_of(i)
+      else
+        coy = oy + self.scroll_of(i)
+      end
+    end
+    var c = self.root.first_child_of(i)
+    while c >= 0
+      deepest = self.list_under_tree(c, x, y, cox, coy, deepest)
+      c = self.root.next_sibling_of(c)
+    end
+    deepest
+  end
+
+  ## A pointer-down event from the engine. When an overlay is open it is
+  ## hit-tested FIRST (it is on top): a click inside picks an option, a click
+  ## outside DISMISSES it and is consumed (not passed to the content below).
+  ## Otherwise: hit-test the tree; focus an input, open a select's overlay,
+  ## capture + set a slider, or run a button/checkbox handler. Returns the hit
+  ## node id (or -1; the select owner when an overlay click is consumed).
   def var pointer_down(x: Int, y: Int) -> Int
+    if self.overlay_owner >= 0
+      return self.handle_overlay_click(x, y)
+    end
     let i = self.hit_test(x, y)
     if i >= 0
-      self.click(i)
+      if self.root.input_at(i)
+        self.focus_input_at(i, x, y)
+      elsif self.root.slider_at(i)
+        self.captured = i
+        self.set_slider_from_x(i, x)
+      elsif self.root.select_at(i)
+        self.open_overlay(i, self.x_of(i), self.y_of(i) + self.h_of(i))
+      else
+        self.arm_long_press(i, x, y)
+        self.click(i)
+      end
+    end
+    if i < 0
+      self.begin_scroll_drag(x, y)
     end
     i
   end
 
+  ## Focus input `i` from a pointer press at (x, y): set the caret to the char
+  ## under x (via measured prefixes), collapse the selection there (anchor =
+  ## caret), and begin a caret-drag so a subsequent `pointer_move` extends a
+  ## selection. (F3 — docs/decisions/text-editing.md.)
+  def var focus_input_at(i: Int, x: Int, y: Int) -> nil
+    self.focused = i
+    let c = self.char_index_at_x(i, x)
+    self.caret.insert(i, c)
+    self.anchor.insert(i, c)
+    self.caret_drag = i
+    self.ui.mark_dirty(i)
+  end
+
+  ## Arm a long-press on node `i` if it has a long-press handler: record the press
+  ## node, clock, and point. `tick` fires it once if the pointer is held past the
+  ## threshold without moving past slop; a move-past-slop or an early up disarms.
+  def var arm_long_press(i: Int, x: Int, y: Int) -> nil
+    if self.root.long_press_at(i) < 0
+      return
+    end
+    self.lp_node = i
+    self.lp_time = self.now
+    self.lp_x = x
+    self.lp_y = y
+  end
+
+  ## Begin a drag-scroll: capture the innermost scrollable list under (x, y) and
+  ## seed velocity tracking; cancel any in-flight fling on it. No-op if no list.
+  def var begin_scroll_drag(x: Int, y: Int) -> nil
+    let list = self.list_under(x, y)
+    if list < 0
+      return
+    end
+    self.scroll_captured = list
+    self.fling_v.insert(list, 0)
+    self.drag_last_pos = self.drag_axis_pos(list, x, y)
+    self.drag_last_time = self.now
+    self.drag_v = 0
+  end
+
+  ## The pointer coordinate along list `i`'s scroll axis: x for a horizontal
+  ## list, y for a vertical one.
+  def drag_axis_pos(i: Int, x: Int, y: Int) -> Int
+    if self.root.horizontal_at(i)
+      return x
+    end
+    y
+  end
+
+  ## Open the overlay owned by node `owner`, anchored at screen (x, y).
+  def var open_overlay(owner: Int, x: Int, y: Int) -> nil
+    self.overlay_owner = owner
+    self.overlay_x = x
+    self.overlay_y = y
+  end
+
+  ## Close any open overlay.
+  def var close_overlay -> nil { self.overlay_owner = -1 }
+
+  ## Whether an overlay is currently open.
+  def overlay_open? -> Bool { self.overlay_owner >= 0 }
+
+  ## A pointer-move event: record the hover position (so a later `scroll` routes
+  ## to the list under the pointer), then — if a node is captured (a slider drag
+  ## in progress) — drive it from the pointer x regardless of where the pointer
+  ## is. Returns the captured node, or -1.
+  def var pointer_move(x: Int, y: Int) -> Int
+    self.hover_x = x
+    self.hover_y = y
+    self.hovered = true
+    self.long_press_check_slop(x, y)
+    if self.caret_drag >= 0
+      self.extend_selection_to_x(self.caret_drag, x)
+      return self.caret_drag
+    end
+    if self.scroll_captured >= 0
+      self.drag_scroll(x, y)
+      return self.scroll_captured
+    end
+    if self.captured < 0
+      return -1
+    end
+    if self.root.slider_at(self.captured)
+      self.set_slider_from_x(self.captured, x)
+    end
+    self.captured
+  end
+
+  ## Drive the captured list's drag-scroll from the pointer's SCROLL-axis
+  ## position: scroll by the delta since the last sample (a drag toward the
+  ## content's start reveals earlier content → offset decreases), and update the
+  ## running velocity (px per clock unit). Axis = X for an hlist, Y for a vlist.
+  def var drag_scroll(x: Int, y: Int) -> nil
+    let list = self.scroll_captured
+    let pos = self.drag_axis_pos(list, x, y)
+    let d = pos - self.drag_last_pos
+    self.scroll_by(list, 0 - d)
+    let t = self.now
+    let dt = t - self.drag_last_time
+    if dt > 0
+      self.drag_v = (0 - d) / dt
+    end
+    self.drag_last_pos = pos
+    self.drag_last_time = t
+  end
+
+  ## Disarm an armed long-press if the pointer has moved past the slop radius.
+  def var long_press_check_slop(x: Int, y: Int) -> nil
+    if self.lp_node < 0
+      return
+    end
+    if App.past_slop(x - self.lp_x, y - self.lp_y)
+      self.lp_node = -1
+    end
+  end
+
+  ## A pointer-up event: release a slider capture; for a captured list, seed its
+  ## fling from the last drag velocity; disarm any pending long-press (an up
+  ## before the threshold is a plain tap, already handled on down).
+  def var pointer_up(x: Int, y: Int) -> nil
+    self.captured = -1
+    self.caret_drag = -1
+    self.lp_node = -1
+    if self.scroll_captured >= 0
+      self.fling_v.insert(self.scroll_captured, self.drag_v)
+      self.scroll_captured = -1
+    end
+  end
+
+  ## The node currently capturing the pointer, or -1.
+  def captured_node -> Int { self.captured }
+
+  ## Programmatic drag: set slider `i`'s value from a pointer x (the headless
+  ## equivalent of a `pointer_move` while captured).
+  def var drag_to(i: Int, x: Int) -> nil { self.set_slider_from_x(i, x) }
+
+  ## Programmatic set: write slider `i`'s value directly, clamped to [min, max].
+  def var set_value(i: Int, v: Int) -> nil { self.write_slider(i, self.clamp_slider(i, v)) }
+
+  ## Current value of slider `i` — a lone `peek` (no `set` in this frame), 0 when
+  ## `i` is not a slider.
+  def slider_value(i: Int) -> Int
+    let idx = self.root.int_index_at(i)
+    if idx < 0
+      return 0
+    end
+    match self.root.ints.get(idx)
+      Some(s) -> s.peek
+      nil -> 0
+    end
+  end
+
+  ## Current selected index of select `i` (a lone `peek`), 0 when not a select.
+  def select_value(i: Int) -> Int
+    let idx = self.root.int_index_at(i)
+    if idx < 0
+      return 0
+    end
+    match self.root.ints.get(idx)
+      Some(s) -> s.peek
+      nil -> 0
+    end
+  end
+
+  ## Current option string shown by select `i` (its selected option).
+  def select_text(i: Int) -> String { self.root.option_at(i, self.select_value(i)) }
+
+  ## The `ListModel` bound to reactive-list `i` — drive it with
+  ## `add`/`remove`/`toggle` to mutate the list; the bound list rebuilds on the
+  ## next flush.
+  def list_model_of(i: Int) -> ListModel { self.root.model_at(i) }
+
+  ## The focused input's node id, or -1 when nothing is focused.
+  def focused_node -> Int { self.focused }
+
+  ## Caret index (chars before the caret) of input `i`, or 0.
+  def caret_of(i: Int) -> Int
+    match self.caret.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Selection anchor of input `i` (defaults to the caret when unset — no
+  ## selection). The selection is [min(anchor,caret), max(anchor,caret)].
+  def anchor_of(i: Int) -> Int
+    match self.anchor.get(i)
+      Some(v) -> *v
+      nil -> self.caret_of(i)
+    end
+  end
+
+  ## Selection start (the lower of anchor / caret) of input `i`.
+  def sel_start_of(i: Int) -> Int
+    let a = self.anchor_of(i)
+    let c = self.caret_of(i)
+    if a < c
+      return a
+    end
+    c
+  end
+
+  ## Selection end (the higher of anchor / caret) of input `i`.
+  def sel_end_of(i: Int) -> Int
+    let a = self.anchor_of(i)
+    let c = self.caret_of(i)
+    if a > c
+      return a
+    end
+    c
+  end
+
+  ## Whether input `i` has a non-empty selection.
+  def has_selection?(i: Int) -> Bool { self.sel_end_of(i) > self.sel_start_of(i) }
+
+  ## The selected substring of input `i` ("" when the selection is empty).
+  def selected_text(i: Int) -> String
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send <= start
+      return ""
+    end
+    var out = ""
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= start && n < send
+        out = "#{out}#{c}"
+      end
+      n = n + 1
+    end
+    out
+  end
+
+  ## Select the whole value of input `i` (anchor at start, caret at end).
+  def var select_all(i: Int) -> nil
+    let len = self.input_value(i).size as Int
+    self.anchor.insert(i, 0)
+    self.caret.insert(i, len)
+    self.ui.mark_dirty(i)
+  end
+
+  ## Measured x (px) of input `i`'s caret within the field text run — the public
+  ## reader paint uses (measure seam, char-metric fallback). Relative to the text
+  ## origin (`x + pad_x`).
+  def caret_x_of(i: Int) -> Int { self.prefix_width(i, self.caret_of(i)) }
+
+  ## Programmatically place input `i`'s caret at char index `pos` (clamped to
+  ## [0, len]), collapsing any selection there. The direct, headless-testable
+  ## caret surface (the pointer/key paths drive it in real use) — handy for
+  ## positioning a caret in a multi-line textarea without computing pixels.
+  def var place_caret(i: Int, pos: Int) -> nil
+    let len = self.input_value(i).size as Int
+    var p = pos
+    if p < 0
+      p = 0
+    end
+    if p > len
+      p = len
+    end
+    self.set_caret_collapsed(i, p)
+  end
+
+  ## Public measured advance width of an arbitrary string at the slice font size
+  ## (used by paint to underline IME marked text). Measure seam / char fallback.
+  def text_width_of(s: String) -> Int { self.text_width(s.clone) }
+
+  ## The marked (IME composition) text of input `i` ("" when not composing).
+  def marked_text_of(i: Int) -> String
+    match self.mark_text.get(i)
+      Some(s) -> s.clone
+      nil -> ""
+    end
+  end
+
+  ## The 0-based line index of input `i`'s caret (number of '\n' before it).
+  def caret_line_of(i: Int) -> Int { self.line_index_of(i, self.caret_of(i)) }
+
+  ## Public line-start reader (start char index of the line containing `pos`).
+  def line_start_at(i: Int, pos: Int) -> Int { self.line_start_of(i, pos) }
+
+  ## Whether checkbox `i` is checked — read LIVE from its `State[Bool]` via a
+  ## single `peek` (no `set` in this frame, so the one-lock-per-frame rule is
+  ## satisfied). `false` when `i` is not a checkbox.
+  def checkbox_checked(i: Int) -> Bool
+    let idx = self.root.bool_index_at(i)
+    if idx < 0
+      return false
+    end
+    match self.root.bools.get(idx)
+      Some(s) -> s.peek
+      nil -> false
+    end
+  end
+
+  ## A CONTROL key-down event WITH modifier flags (F3 — docs/decisions/
+  ## text-editing.md). `shift` extends the selection (arrows/home/end keep the
+  ## anchor); `ctrl` triggers clipboard/undo shortcuts (c/x/v/z/a). Routed to the
+  ## focused input only; printable characters still arrive via `text_input`.
+  ##
+  ## canvas's `Event.KeyDown` carries NO modifiers today, so the windowed shells
+  ## pass `shift=false`/`ctrl=false` — keyboard selection-extend and ctrl-shortcuts
+  ## are reachable through THIS API (and headless tests) but dormant on a real
+  ## window until canvas adds a modifier bitmask (filed canvas gap). The plain
+  ## `key_down(code)` alias forwards here with both flags false (back-compat).
+  def var key_down_mod(code: Int, shift: Bool, ctrl: Bool) -> nil
+    let i = self.focused
+    if i < 0
+      return
+    end
+    if !self.root.input_at(i)
+      return
+    end
+    if ctrl
+      self.ctrl_key(i, code)
+      return
+    end
+    if code == key_backspace()
+      self.backspace(i)
+    elsif code == key_delete()
+      self.forward_delete(i)
+    elsif code == key_left()
+      self.move_caret(i, -1, shift)
+    elsif code == key_right()
+      self.move_caret(i, 1, shift)
+    elsif code == key_up()
+      self.move_caret_line(i, -1, shift)
+    elsif code == key_down_arrow()
+      self.move_caret_line(i, 1, shift)
+    elsif code == key_home()
+      self.caret_home(i, shift)
+    elsif code == key_end()
+      self.caret_end(i, shift)
+    end
+  end
+
+  ## Back-compat: a modifier-less control key (the original `key_down` / `key`).
+  ## Forwards to `key_down_mod` with no shift/ctrl, so every existing call site
+  ## and pin is unchanged.
+  def var key_down(code: Int) -> nil { self.key_down_mod(code, false, false) }
+
+  ## A ctrl-shortcut on the focused input `i`: c=copy, x=cut, v=paste, z=undo,
+  ## a=select-all. (Only reachable when a shell passes ctrl=true; today test-only.)
+  def var ctrl_key(i: Int, code: Int) -> nil
+    if code == 99
+      self.copy
+    elsif code == 120
+      self.cut
+    elsif code == 118
+      self.paste
+    elsif code == 122
+      self.undo
+    elsif code == 97
+      self.select_all(i)
+    end
+  end
+
+  ## A text-input event: insert the Unicode codepoint `cp` at the focused
+  ## input's caret (single-lock RMW via `insert_char`). The ONLY path that adds
+  ## text. No-op when nothing focused. `type_char` is the alias headless tests
+  ## use.
+  def var text_input(cp: Int) -> nil
+    let i = self.focused
+    if i < 0
+      return
+    end
+    if !self.root.input_at(i)
+      return
+    end
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.insert_char(i, cp)
+  end
+
+  ## Inject the clipboard seam (F3 — mirrors set_measure / set_clock): a `get`
+  ## closure returning the system clipboard text and a `set` closure writing it.
+  ## The shell wires canvas's `Window.clipboard_text` / `set_clipboard_text`;
+  ## headless tests inject a fake (a captured String cell). Stored in 0-or-1-entry
+  ## pools + a presence flag — never `Option[any Fn]` fields.
+  ##
+  ##   app.set_clipboard({ || board.peek }, { |s| board.set_via(s) })
+  def var set_clipboard(get: any Fn[Fn() -> String], set: any Fn[Fn(String) -> nil]) -> nil
+    self.clip_get_fns = Array.new
+    self.clip_set_fns = Array.new
+    self.clip_get_fns.push(get)
+    self.clip_set_fns.push(set)
+    self.has_clipboard = true
+  end
+
+  ## Whether a clipboard seam has been injected (else copy/cut/paste are inert).
+  def clipboarded? -> Bool { self.has_clipboard }
+
+  ## Copy the focused input's selection to the clipboard (inert with no selection
+  ## or no clipboard seam). No value change.
+  def var copy -> nil
+    let i = self.focused
+    if i < 0 || !self.has_clipboard
+      return
+    end
+    let sel = self.selected_text(i)
+    if sel.size as Int == 0
+      return
+    end
+    self.clip_write(sel)
+  end
+
+  ## Cut the focused input's selection: copy it to the clipboard, then delete it
+  ## (one undo entry). Inert with no selection or no clipboard seam.
+  def var cut -> nil
+    let i = self.focused
+    if i < 0 || !self.has_clipboard
+      return
+    end
+    if !self.has_selection?(i)
+      return
+    end
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    let sel = self.selected_cached(i)
+    self.clip_write(sel)
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.delete_range(i, start, send)
+    self.set_caret_collapsed(i, start)
+  end
+
+  ## Paste the clipboard text into the focused input at the caret, replacing any
+  ## selection. Inert with no clipboard seam. Caret lands after the inserted text.
+  def var paste -> nil
+    let i = self.focused
+    if i < 0 || !self.has_clipboard
+      return
+    end
+    let text = self.clip_read
+    let n = text.size as Int
+    if n == 0
+      return
+    end
+    let start = self.sel_start_of(i)
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.replace_selection_with(i, text)
+    self.set_caret_collapsed(i, start + n)
+  end
+
+  ## An IME COMPOSITION (marked-text) update on the focused input (F3 — mirrors
+  ## canvas's `Event.TextEditing(start, len)` + `composition_text`). Stores the
+  ## uncommitted marked `text` so paint renders it inline (underlined) at the
+  ## caret; the committing `TextInput` later clears it and inserts the final char.
+  ## An empty `text` clears the mark (composition cancelled/committed). No-op when
+  ## nothing is focused. Dirties the focused input so the marked text repaints.
+  def var text_editing(start: Int, len: Int, text: String) -> nil
+    let i = self.focused
+    if i < 0 || !self.root.input_at(i)
+      return
+    end
+    self.mark_text.insert(i, text)
+    self.mark_start.insert(i, start)
+    self.mark_len.insert(i, len)
+    self.ui.mark_dirty(i)
+  end
+
+  ## A mouse-wheel event: scroll the innermost scrollable `list` under the last
+  ## hovered point by the wheel delta, in PIXELS. `+dy` is wheel up/away → scroll
+  ## content UP (toward the top) → DECREASE the offset; `-dy` (wheel down)
+  ## increases it. Each wheel click moves `scroll_line` px (default = row_height;
+  ## `set_scroll_line` overrides). The Int delta is multiplied by the line factor
+  ## here — the App boundary stays Int (deterministic / headless-pinnable); the
+  ## shell quantizes canvas's Float32 wheel deltas to Int clicks before calling.
+  ## No-op if nothing scrollable is hovered.
+  def var scroll(dx: Int, dy: Int) -> nil
+    if !self.hovered
+      return
+    end
+    let list = self.list_under(self.hover_x, self.hover_y)
+    if list < 0
+      return
+    end
+    if self.root.horizontal_at(list)
+      var d = dx
+      if d == 0
+        d = dy
+      end
+      self.scroll_by(list, 0 - d * self.scroll_line)
+    else
+      self.scroll_by(list, 0 - dy * self.scroll_line)
+    end
+  end
+
+  ## Set the wheel scroll line-height factor (px per wheel click). Default
+  ## `row_height`. A wheel `scroll(0, n)` then moves `n * px`.
+  def var set_scroll_line(px: Int) -> nil { self.scroll_line = px }
+
+  ## Pixels per wheel click (the current line-height factor).
+  def scroll_line_px -> Int { self.scroll_line }
+
+  ## Inject the monotonic clock seam (mirrors `set_measure`): a closure
+  ## `{ || Int }` returning a monotonic timestamp (ms). The shell supplies a real
+  ## clock; with none injected, `now` returns the deterministic frame counter that
+  ## `tick` advances, so fling + long-press are exactly reproducible in tests.
+  ##
+  ##   app.set_clock({ || canvas.now_ms })
+  def var set_clock(f: any Fn[Fn() -> Int]) -> nil
+    self.clock_fns = Array.new
+    self.clock_fns.push(f)
+    self.has_clock = true
+  end
+
+  ## Whether a real clock has been injected (else the deterministic counter).
+  def clocked? -> Bool { self.has_clock }
+
+  ## Current monotonic time: the injected clock, else the frame counter.
+  def now -> Int
+    if self.has_clock
+      match self.clock_fns.get(0)
+        Some(f) -> return f.()
+        nil -> nil
+      end
+    end
+    self.frame_counter
+  end
+
+  ## Per-frame step the shell's loop calls once per frame BEFORE repaint: advance
+  ## the deterministic clock, step any active flings, step any live animations, and
+  ## fire a long-press whose hold time has elapsed. Returns true when something
+  ## changed (a fling advanced, an animation moved, or a long-press fired) so the
+  ## shell knows to flush/repaint and keep ticking. Fling + animation both step
+  ## from the ONE clock advance per tick (F4 — docs/decisions/animation.md).
+  def var tick -> Bool
+    if !self.has_clock
+      self.frame_counter = self.frame_counter + 1
+    end
+    var changed = self.step_flings
+    if self.step_animations
+      changed = true
+    end
+    if self.fire_long_press
+      changed = true
+    end
+    changed
+  end
+
+  ## Advance every active fling by one step: `offset += v` (clamped), then decay
+  ## `v *= decay`; drop the fling when |v| falls below the threshold OR the scroll
+  ## clamped (hit an end). Returns true if any fling moved.
+  def var step_flings -> Bool
+    var moved = false
+    for list in self.fling_v.keys
+      let v = self.fling_value(list)
+      if v == 0
+
+      else
+        let before = self.scroll_of(list)
+        self.scroll_by(list, v)
+        let after = self.scroll_of(list)
+        if after != before
+          moved = true
+        end
+        var nv = v * fling_decay_num() / fling_decay_den()
+        if App.below_min(nv) || after == before
+          nv = 0
+        end
+        self.fling_v.insert(list, nv)
+      end
+    end
+    moved
+  end
+
+  ## Fire an armed long-press whose hold time has elapsed (and disarm). Returns
+  ## true if one fired. The press point's slop was checked on each move.
+  def var fire_long_press -> Bool
+    if self.lp_node < 0
+      return false
+    end
+    if self.now - self.lp_time < long_press_ms()
+      return false
+    end
+    let node = self.lp_node
+    self.lp_node = -1
+    self.run_long_press(node)
+    true
+  end
+
+  ## --- F4 animation engine (docs/decisions/animation.md) ---
+  ## Tween `node`'s paint-time offset from (fx, fy) to (tx, ty) over `dur` clock
+  ## units with easing `curve`. The offset is a PAINT translate — it shifts where
+  ## the node draws without touching layout (no re-arrange, siblings unmoved). A
+  ## new tween on a node+channel supersedes any live one on that channel.
+  def var tween_offset(node: Int, fx: Int, fy: Int, tx: Int, ty: Int, dur: Int, curve: Int) -> nil
+    self.start_tween(node, prop_off_x(), fx, tx, dur, curve, -1)
+    self.start_tween(node, prop_off_y(), fy, ty, dur, curve, -1)
+  end
+
+  ## Tween `node`'s paint colour override from (fr,fg,fb) to (tr,tg,tb) over `dur`
+  ## clock units with easing `curve`. Three scalar channel rows (r/g/b); the
+  ## node's colour-consuming draws read the override while live. Marks the override
+  ## present so paint picks it up even before the first step.
+  def var tween_color(
+    node: Int,
+    fr: Int,
+    fg: Int,
+    fb: Int,
+    tr: Int,
+    tg: Int,
+    tb: Int,
+    dur: Int,
+    curve: Int,
+  ) -> nil
+    self.anim_has_col_of.insert(node, true)
+    self.anim_col_r_of.insert(node, fr)
+    self.anim_col_g_of.insert(node, fg)
+    self.anim_col_b_of.insert(node, fb)
+    self.start_tween(node, prop_col_r(), fr, tr, dur, curve, -1)
+    self.start_tween(node, prop_col_g(), fg, tg, dur, curve, -1)
+    self.start_tween(node, prop_col_b(), fb, tb, dur, curve, -1)
+  end
+
+  ## Like `tween_color`, with a STORED completion closure fired once when the tween
+  ## finishes (on the LAST — blue — channel, so it fires exactly once per colour
+  ## tween). The closure is the do/brace stored idiom, pooled in `anim_callbacks`.
+  def var tween_color_done(
+    node: Int,
+    fr: Int,
+    fg: Int,
+    fb: Int,
+    tr: Int,
+    tg: Int,
+    tb: Int,
+    dur: Int,
+    curve: Int,
+    done: any Fn[Fn(&var Ui) -> nil],
+  ) -> nil
+    self.anim_has_col_of.insert(node, true)
+    self.anim_col_r_of.insert(node, fr)
+    self.anim_col_g_of.insert(node, fg)
+    self.anim_col_b_of.insert(node, fb)
+    self.start_tween(node, prop_col_r(), fr, tr, dur, curve, -1)
+    self.start_tween(node, prop_col_g(), fg, tg, dur, curve, -1)
+    let cb = self.anim_callbacks.size as Int
+    self.anim_callbacks.push(done)
+    self.start_tween(node, prop_col_b(), fb, tb, dur, curve, cb)
+  end
+
+  ## Like `tween_offset`, with a STORED completion closure fired once (on the
+  ## y channel) when the tween finishes.
+  def var tween_offset_done(
+    node: Int,
+    fx: Int,
+    fy: Int,
+    tx: Int,
+    ty: Int,
+    dur: Int,
+    curve: Int,
+    done: any Fn[Fn(&var Ui) -> nil],
+  ) -> nil
+    self.start_tween(node, prop_off_x(), fx, tx, dur, curve, -1)
+    let cb = self.anim_callbacks.size as Int
+    self.anim_callbacks.push(done)
+    self.start_tween(node, prop_off_y(), fy, ty, dur, curve, cb)
+  end
+
+  ## Whether ANY animation is live (so a shell knows to keep drawing; `tick`'s
+  ## bool return already drives the loop, this is for queries).
+  def animating? -> Bool
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k)
+        return true
+      end
+      k = k + 1
+    end
+    false
+  end
+
+  ## Whether node `i` has any live animation.
+  def animating_node?(i: Int) -> Bool
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k) && self.anim_node_at(k) == i
+        return true
+      end
+      k = k + 1
+    end
+    false
+  end
+
+  ## Mark node `i` as colour-transitioning: a later `set_color(i, …)` animates from
+  ## the current resolved colour to the new one over `dur`/`curve` instead of
+  ## snapping (implicit transition, colour Tier-1). Offset transitions are filed.
+  def var transition_color(i: Int, dur: Int, curve: Int) -> nil
+    self.trans_col_of.insert(i, 1)
+    self.trans_col_dur_of.insert(i, dur)
+    self.trans_col_curve_of.insert(i, curve)
+  end
+
+  ## Set node `i`'s paint colour override to (r,g,b). If `i` is marked with
+  ## `transition_color`, ANIMATE from its current resolved colour to the new one;
+  ## else set it instantly. The implicit-animation surface.
+  def var set_color(i: Int, r: Int, g: Int, b: Int) -> nil
+    if self.transitions_color?(i)
+      let cr = self.anim_color_r_of(i, r)
+      let cg = self.anim_color_g_of(i, g)
+      let cb = self.anim_color_b_of(i, b)
+      let dur = self.trans_col_dur(i)
+      let curve = self.trans_col_curve(i)
+      self.tween_color(i, cr, cg, cb, r, g, b, dur, curve)
+    else
+      self.anim_has_col_of.insert(i, true)
+      self.anim_col_r_of.insert(i, r)
+      self.anim_col_g_of.insert(i, g)
+      self.anim_col_b_of.insert(i, b)
+      self.ui.mark_dirty(i)
+    end
+  end
+
+  ## Resolved animated x-offset (paint translate) of node `i`, 0 if none.
+  def anim_off_x(i: Int) -> Int
+    match self.anim_off_x_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Resolved animated y-offset (paint translate) of node `i`, 0 if none.
+  def anim_off_y(i: Int) -> Int
+    match self.anim_off_y_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Whether node `i` has an active animated/overridden colour.
+  def anim_has_color?(i: Int) -> Bool
+    match self.anim_has_col_of.get(i)
+      Some(v) -> *v
+      nil -> false
+    end
+  end
+
+  ## Resolved colour channel of node `i` (the override when present, else the
+  ## supplied default) — the one decision point paint uses for every coloured draw.
+  def anim_color_r_of(i: Int, default: Int) -> Int
+    self.anim_channel(self.anim_col_r_of.get(i), default)
+  end
+
+  def anim_color_g_of(i: Int, default: Int) -> Int
+    self.anim_channel(self.anim_col_g_of.get(i), default)
+  end
+
+  def anim_color_b_of(i: Int, default: Int) -> Int
+    self.anim_channel(self.anim_col_b_of.get(i), default)
+  end
+
+  ## The active animation count (live + retired rows) — for tests asserting slot
+  ## reuse (a retired slot is reused, so the row count does not grow unbounded).
+  def anim_row_count -> Int { self.anim_count }
+
+  ## Number of LIVE animation rows.
+  def anim_live_count -> Int
+    var c = 0
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k)
+        c = c + 1
+      end
+      k = k + 1
+    end
+    c
+  end
+
+  ## The active fling velocity of list `i` (0 if none).
+  def fling_value(i: Int) -> Int
+    match self.fling_v.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Whether |v| is below the fling stop threshold.
+  def self.below_min(v: Int) -> Bool
+    var a = v
+    if a < 0
+      a = 0 - a
+    end
+    a < fling_min_v()
+  end
+
+  ## Whether a (dx, dy) move exceeds the gesture slop radius (box approximation).
+  def self.past_slop(dx: Int, dy: Int) -> Bool
+    var ax = dx
+    if ax < 0
+      ax = 0 - ax
+    end
+    var ay = dy
+    if ay < 0
+      ay = 0 - ay
+    end
+    ax > gesture_slop() || ay > gesture_slop()
+  end
+
+  ## Run node `i`'s long-press handler (no-op when it has none).
+  def var run_long_press(i: Int) -> nil
+    let hi = self.root.long_press_at(i)
+    if hi < 0
+      return
+    end
+    match self.root.long_press_handlers.get(hi)
+      Some(f) -> f.(&var self.ui)
+      nil -> nil
+    end
+  end
+
+  ## A window-resize event: record the new design size and re-lay-out (the
+  ## caller repaints). canvas re-creates the GPU surface; quiver just re-arranges.
+  def var resize(w: Int, h: Int) -> nil
+    self.design_w = w
+    self.design_h = h
+    self.arrange
+  end
+
+  ## Inject the real text-metric seam (docs/decisions/text-metrics-seam.md). The
+  ## shell binary — the only place quiver (L2) and canvas (L1) symbols meet —
+  ## passes a closure `{ |text, size| Int }` that returns the true advance width
+  ## (px) of `text` at logical font size `size`; quiver then sizes text leaves and
+  ## checkbox labels by it instead of the char-metric estimate. Stored in a
+  ## 0-or-1-entry pool + a presence flag (not an `Option[Fn]` field — ruxen Q2).
+  ## Re-lays-out immediately so existing geometry reflects the real metrics.
+  ##
+  ##   app.set_measure({ |t, s| canvas.measure_text_sized(t, s as Float32) })
+  ##
+  ## With no measure ever set, layout uses the char-metric fallback — headless,
+  ## the test suite, and Skia-less examples behave identically (no Err).
+  def var set_measure(f: any Fn[Fn(String, Int) -> Int]) -> nil
+    self.measure_fns = Array.new
+    self.measure_fns.push(f)
+    self.has_measure = true
+    self.arrange
+  end
+
+  ## Whether a real-metric measure fn has been injected (else char-metric
+  ## fallback). Exposed so a test/double can assert the seam is (un)set.
+  def measuring? -> Bool { self.has_measure }
+
+  ## Current design (logical) width / height, as last set by `resize`.
+  def design_width -> Int { self.design_w }
+
+  def design_height -> Int { self.design_h }
+
   private
 
-  def geom_lookup(table: &Hash[Int, Int], i: Int) -> Int
-    match table.get(i)
+  ## --- F4 animation engine internals ---
+  ## Start a tween row for (node, prop): supersede any live row on the same
+  ## node+channel (retire it, no double-step), then allocate a slot (reuse a dead
+  ## one — the free-list pool pattern) and fill it. `cb` is an `anim_callbacks`
+  ## index or -1. Seeds the resolved override with `from` so paint reads it pre-step.
+  def var start_tween(node: Int, prop: Int, from: Int, to: Int, dur: Int, curve: Int, cb: Int) -> nil
+    self.retire_channel(node, prop)
+    self.write_resolved(node, prop, from)
+    var slot = self.free_anim_slot
+    if slot < 0
+      slot = self.anim_count
+      self.anim_count = self.anim_count + 1
+    end
+    self.anim_node.insert(slot, node)
+    self.anim_prop.insert(slot, prop)
+    self.anim_from.insert(slot, from)
+    self.anim_to.insert(slot, to)
+    self.anim_start.insert(slot, self.now)
+    self.anim_dur.insert(slot, dur)
+    self.anim_curve.insert(slot, curve)
+    self.anim_live.insert(slot, true)
+    self.anim_cb.insert(slot, cb)
+    self.ui.mark_dirty(node)
+  end
+
+  ## Index of a retired (reusable) animation slot, or -1 (append a fresh row). The
+  ## arenas use `Array.insert` for slot reuse and `push` for growth, so the row
+  ## count never grows past the live high-water mark.
+  def free_anim_slot -> Int
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if !self.anim_live_at(k)
+        return k
+      end
+      k = k + 1
+    end
+    -1
+  end
+
+  ## Retire any LIVE row animating (node, prop) — supersede so a re-triggered tween
+  ## does not double-step. Does NOT fire the callback (it was superseded, not
+  ## completed).
+  def var retire_channel(node: Int, prop: Int) -> nil
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k) && self.anim_node_at(k) == node && self.anim_prop_at(k) == prop
+        self.anim_live.insert(k, false)
+      end
+      k = k + 1
+    end
+  end
+
+  ## Step every live animation by one clock tick: resolve each row's eased value,
+  ## write it into the node's override, mark the node dirty ONLY when its resolved
+  ## value actually changed (dirty-set exactness — non-animating siblings never
+  ## mark). A finished row clamps to `to`, fires its completion callback once, and
+  ## retires (slot reusable). Returns true if any row moved.
+  def var step_animations -> Bool
+    var moved = false
+    var k = 0
+    let n = self.anim_count
+    while k < n
+      if self.anim_live_at(k)
+        if self.step_anim_row(k)
+          moved = true
+        end
+      end
+      k = k + 1
+    end
+    moved
+  end
+
+  ## Step one live animation row `k`. Returns true if its resolved value changed.
+  def var step_anim_row(k: Int) -> Bool
+    let node = self.anim_node_at(k)
+    let prop = self.anim_prop_at(k)
+    let dur = self.anim_dur_at(k)
+    let elapsed = self.now - self.anim_start_at(k)
+    let before = self.resolved_value(node, prop)
+    if elapsed >= dur || dur <= 0
+      let endv = self.anim_to_at(k)
+      self.write_resolved(node, prop, endv)
+      self.anim_live.insert(k, false)
+      self.fire_anim_callback(k)
+      if endv != before
+        self.ui.mark_dirty(node)
+        return true
+      end
+      return false
+    end
+    var p = elapsed * anim_scale() / dur
+    let e = ease(self.anim_curve_at(k), p)
+    let v = anim_lerp(self.anim_from_at(k), self.anim_to_at(k), e)
+    self.write_resolved(node, prop, v)
+    if v != before
+      self.ui.mark_dirty(node)
+      return true
+    end
+    false
+  end
+
+  ## Fire animation row `k`'s completion callback (if any) exactly once.
+  def var fire_anim_callback(k: Int) -> nil
+    let ci = self.anim_cb_at(k)
+    if ci < 0
+      return
+    end
+    match self.anim_callbacks.get(ci)
+      Some(f) -> f.(&var self.ui)
+      nil -> nil
+    end
+  end
+
+  ## Write the resolved override for (node, prop) into the right channel hash.
+  def var write_resolved(node: Int, prop: Int, v: Int) -> nil
+    if prop == prop_off_x()
+      self.anim_off_x_of.insert(node, v)
+    elsif prop == prop_off_y()
+      self.anim_off_y_of.insert(node, v)
+    elsif prop == prop_col_r()
+      self.anim_col_r_of.insert(node, v)
+    elsif prop == prop_col_g()
+      self.anim_col_g_of.insert(node, v)
+    elsif prop == prop_col_b()
+      self.anim_col_b_of.insert(node, v)
+    end
+  end
+
+  ## The current resolved value of (node, prop) (0 default for offsets; the channel
+  ## override else). Used to detect a real change for dirty-set exactness.
+  def resolved_value(node: Int, prop: Int) -> Int
+    if prop == prop_off_x()
+      return self.anim_off_x(node)
+    end
+    if prop == prop_off_y()
+      return self.anim_off_y(node)
+    end
+    if prop == prop_col_r()
+      return self.anim_channel(self.anim_col_r_of.get(node), 0)
+    end
+    if prop == prop_col_g()
+      return self.anim_channel(self.anim_col_g_of.get(node), 0)
+    end
+    self.anim_channel(self.anim_col_b_of.get(node), 0)
+  end
+
+  ## Resolve an optional channel value to the override or the supplied default.
+  def anim_channel(opt: Option[Int], default: Int) -> Int
+    match opt
       Some(v) -> *v
-      nil     -> 0
+      nil -> default
+    end
+  end
+
+  ## Liveness / row accessors (the slot-keyed Hash readers — `Array.insert` is
+  ## insert-and-shift in ruxen v1, NOT replace, so the mutable animation rows live
+  ## in slot-keyed Hashes that update in place; `anim_count` is the slot high-water).
+  def anim_live_at(k: Int) -> Bool
+    match self.anim_live.get(k)
+      Some(v) -> *v
+      nil -> false
+    end
+  end
+
+  def anim_node_at(k: Int) -> Int { self.anim_hash_at(self.anim_node.get(k)) }
+
+  def anim_prop_at(k: Int) -> Int { self.anim_hash_at(self.anim_prop.get(k)) }
+
+  def anim_from_at(k: Int) -> Int { self.anim_hash_at(self.anim_from.get(k)) }
+
+  def anim_to_at(k: Int) -> Int { self.anim_hash_at(self.anim_to.get(k)) }
+
+  def anim_start_at(k: Int) -> Int { self.anim_hash_at(self.anim_start.get(k)) }
+
+  def anim_dur_at(k: Int) -> Int { self.anim_hash_at(self.anim_dur.get(k)) }
+
+  def anim_curve_at(k: Int) -> Int { self.anim_hash_at(self.anim_curve.get(k)) }
+
+  def anim_cb_at(k: Int) -> Int { self.anim_hash_at(self.anim_cb.get(k)) }
+
+  ## Read an Int from a slot-keyed animation hash (-1 default sentinel).
+  def anim_hash_at(opt: Option[Int]) -> Int
+    match opt
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## Whether node `i` is marked for colour transitions.
+  def transitions_color?(i: Int) -> Bool
+    match self.trans_col_of.get(i)
+      Some(v) -> *v > 0
+      nil -> false
+    end
+  end
+
+  def trans_col_dur(i: Int) -> Int
+    match self.trans_col_dur_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def trans_col_curve(i: Int) -> Int
+    match self.trans_col_curve_of.get(i)
+      Some(v) -> *v
+      nil -> curve_linear()
+    end
+  end
+
+  ## Clamp a desired scroll offset for list `i` to [0, content - viewport].
+  ## Content shorter than the viewport pins the offset at 0.
+  def clamp_scroll(i: Int, offset: Int) -> Int
+    let max_off = self.content_height(i) - self.root.viewport_at(i)
+    if max_off <= 0
+      return 0
+    end
+    if offset < 0
+      return 0
+    end
+    if offset > max_off
+      return max_off
+    end
+    offset
+  end
+
+  ## Advance width (px) of `s` at the slice font size: the injected real-metric
+  ## seam when one is set, else the char-metric estimate. The ONE place text
+  ## width is resolved — `leaf_w`/`checkbox_w` both go through it, so swapping
+  ## metrics in (or out) is a single decision point. `arrange`'s flat pre-pass is
+  ## still the only caller path during layout, so each leaf is measured once.
+  def text_width(s: String) -> Int
+    if self.has_measure
+      match self.measure_fns.get(0)
+        Some(f) -> return f.(s.clone, text_size())
+        nil -> nil
+      end
+    end
+    s.size as Int * char_width()
+  end
+
+  ## Text width of a leaf node: measured text + horizontal padding. Uses the
+  ## injected real metrics when present, else the char-metric estimate.
+  def leaf_w(i: Int) -> Int
+    let label = self.text_of(i)
+    self.text_width(label) + pad_x() * 2
+  end
+
+  ## Width of a checkbox: leading pad + box + gap + measured label + trailing pad.
+  ## (The label is the static `label_at`; checkbox computes hold a sentinel, not
+  ## the display text, so read the label directly.)
+  def checkbox_w(i: Int) -> Int
+    let label = self.root.label_at(i)
+    let label_w = self.text_width(label)
+    pad_x() + check_box_size() + pad_x() + label_w + pad_x()
+  end
+
+  ## Set slider `i`'s value from a pointer x: map x -> value, then write once.
+  ## The map reads NO state (pure geometry math), so the write is a single lock
+  ## (set only) — no peek+set pair (the one-lock-per-frame landmine).
+  def var set_slider_from_x(i: Int, x: Int) -> nil { self.write_slider(i, self.value_from_x(i, x)) }
+
+  ## Map a pointer x to a clamped value for slider `i`:
+  ##   v = min + round((x - track_left) / track_w * (max - min)), clamped.
+  ## Guards the ends explicitly so the rounding never sees a negative numerator.
+  def value_from_x(i: Int, x: Int) -> Int
+    let min = self.root.slider_min_at(i)
+    let max = self.root.slider_max_at(i)
+    let span = max - min
+    if span <= 0
+      return min
+    end
+    let track_left = self.x_of(i) + slider_thumb() / 2
+    let track_w = self.root.slider_width_at(i) - slider_thumb()
+    if track_w <= 0
+      return min
+    end
+    let rel = x - track_left
+    if rel <= 0
+      return min
+    end
+    if rel >= track_w
+      return max
+    end
+    min + (rel * span + track_w / 2) / track_w
+  end
+
+  ## Clamp `v` to slider `i`'s [min, max].
+  def clamp_slider(i: Int, v: Int) -> Int
+    let min = self.root.slider_min_at(i)
+    let max = self.root.slider_max_at(i)
+    if v < min
+      return min
+    end
+    if v > max
+      return max
+    end
+    v
+  end
+
+  ## Write slider `i`'s value through a single `State.set` (one lock; the value
+  ## was computed without reading the state, so there is no peek+set pair).
+  def var write_slider(i: Int, v: Int) -> nil
+    let idx = self.root.int_index_at(i)
+    if idx < 0
+      return
+    end
+    match self.root.ints.get(idx)
+      Some(s) -> s.set(&var self.ui, v)
+      nil -> nil
+    end
+  end
+
+  ## Handle a click while an overlay is open (a select popup): a click on option
+  ## row `k` selects it and closes; a click outside the popup just closes. Either
+  ## way the overlay is dismissed and the click is consumed. Returns the owner.
+  def var handle_overlay_click(x: Int, y: Int) -> Int
+    let owner = self.overlay_owner
+    let k = self.overlay_option_at(x, y)
+    if k >= 0
+      self.write_select(owner, k)
+    end
+    self.close_overlay
+    owner
+  end
+
+  ## Which popup option row (x, y) lands on, or -1 if outside the popup. The
+  ## popup is `select_width` wide, `option_count` rows of `row_height`, anchored
+  ## at (overlay_x, overlay_y).
+  def overlay_option_at(x: Int, y: Int) -> Int
+    let owner = self.overlay_owner
+    let w = self.root.select_width_at(owner)
+    let count = self.root.option_count_at(owner)
+    if x < self.overlay_x || x >= self.overlay_x + w
+      return -1
+    end
+    let rel = y - self.overlay_y
+    if rel < 0
+      return -1
+    end
+    let k = rel / row_height()
+    if k >= count
+      return -1
+    end
+    k
+  end
+
+  ## Write select `i`'s selected index through a single `State.set` (one lock;
+  ## the index came from geometry, not a state read — no peek+set pair).
+  def var write_select(i: Int, v: Int) -> nil
+    let idx = self.root.int_index_at(i)
+    if idx < 0
+      return
+    end
+    match self.root.ints.get(idx)
+      Some(s) -> s.set(&var self.ui, v)
+      nil -> nil
     end
   end
 
@@ -180,4 +2309,533 @@ class App
     let gy = self.y_of(i)
     x >= gx && x < gx + self.w_of(i) && y >= gy && y < gy + self.h_of(i)
   end
+
+  ## Current value string of input `i` — read LIVE from its reactive `State`
+  ## (a single `peek`, one lock per frame). Used to clamp a caret move.
+  def input_value(i: Int) -> String
+    let idx = self.root.value_index_at(i)
+    if idx < 0
+      return ""
+    end
+    match self.root.values.get(idx)
+      Some(s) -> s.peek
+      nil -> ""
+    end
+  end
+
+  ## Edit input `i`'s value through a SINGLE `State.update` (read-modify-write
+  ## under one Mutex lock). A separate `peek`+`set` pair would hold two locks on
+  ## the same Mutex across this frame — the "one lock per frame" landmine, which
+  ## corrupts the value — so the new string is built inside the update closure.
+  def var edit_value(i: Int, f: any Fn[Fn(String) -> String]) -> nil
+    let idx = self.root.value_index_at(i)
+    if idx < 0
+      return
+    end
+    match self.root.values.get(idx)
+      Some(s) -> s.update(&var self.ui, f)
+      nil -> nil
+    end
+  end
+
+  ## Insert the printable char `code` at input `i`'s caret. If a selection is
+  ## active, REPLACE it: delete the selected range first (one RMW), then insert at
+  ## the selection start. Collapses the selection at the new caret.
+  def var insert_char(i: Int, code: Int) -> nil
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    let had_sel = send > start
+    self.edit_value(i, do |cur: String|
+        var out = ""
+        var n = 0
+        for c in cur.chars
+          if n == start
+            let ch = code as Char
+            out = "#{out}#{ch}"
+          end
+          if !(had_sel && n >= start && n < send)
+            out = "#{out}#{c}"
+          end
+          n = n + 1
+        end
+        if start >= n
+          let ch = code as Char
+          out = "#{out}#{ch}"
+        end
+        out
+      end)
+    self.set_caret_collapsed(i, start + 1)
+  end
+
+  ## Delete before input `i`'s caret. With a selection: delete the whole selection
+  ## (caret to its start). Without: delete the one char before the caret.
+  def var backspace(i: Int) -> nil
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send > start
+      self.push_undo(i)
+      self.clear_mark(i)
+      self.delete_range(i, start, send)
+      self.set_caret_collapsed(i, start)
+      return
+    end
+    if start <= 0
+      return
+    end
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.delete_range(i, start - 1, start)
+    self.set_caret_collapsed(i, start - 1)
+  end
+
+  ## Move input `i`'s caret by `delta`, clamped to [0, length]. `extend` keeps the
+  ## anchor (shift-select); otherwise the selection collapses at the new caret.
+  def var move_caret(i: Int, delta: Int, extend: Bool) -> nil
+    let len = self.input_value(i).size as Int
+    var next = self.caret_of(i) + delta
+    if next < 0
+      next = 0
+    end
+    if next > len
+      next = len
+    end
+    self.set_caret(i, next, extend)
+  end
+
+  ## Delete the char AT input `i`'s caret (forward delete). With a selection, delete
+  ## the selection instead (caret to its start).
+  def var forward_delete(i: Int) -> nil
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send > start
+      self.push_undo(i)
+      self.clear_mark(i)
+      self.delete_range(i, start, send)
+      self.set_caret_collapsed(i, start)
+      return
+    end
+    let len = self.input_value(i).size as Int
+    if start >= len
+      return
+    end
+    self.push_undo(i)
+    self.clear_mark(i)
+    self.delete_range(i, start, start + 1)
+    self.ui.mark_dirty(i)
+  end
+
+  ## Move input `i`'s caret to the start of its current line (`extend` = shift).
+  def var caret_home(i: Int, extend: Bool) -> nil
+    self.set_caret(i, self.line_start_of(i, self.caret_of(i)), extend)
+  end
+
+  ## Move input `i`'s caret to the end of its current line (`extend` = shift).
+  def var caret_end(i: Int, extend: Bool) -> nil
+    self.set_caret(i, self.line_end_of(i, self.caret_of(i)), extend)
+  end
+
+  ## Delete the [start, end) char range of input `i` via one RMW (no caret move).
+  def var delete_range(i: Int, start: Int, send: Int) -> nil { self.edit_value(i, do |cur: String|
+      var out = ""
+      var n = 0
+      for c in cur.chars
+        if n < start || n >= send
+          out = "#{out}#{c}"
+        end
+        n = n + 1
+      end
+      out
+    end) }
+
+  ## Set input `i`'s caret to `pos`. `extend` keeps the anchor (shift-select);
+  ## else collapse the selection there. Dirties the node (caret/selection repaint).
+  def var set_caret(i: Int, pos: Int, extend: Bool) -> nil
+    self.caret.insert(i, pos)
+    if !extend
+      self.anchor.insert(i, pos)
+    end
+    self.ui.mark_dirty(i)
+  end
+
+  ## Set caret AND anchor to `pos` (collapse the selection) and dirty the node.
+  def var set_caret_collapsed(i: Int, pos: Int) -> nil
+    self.caret.insert(i, pos)
+    self.anchor.insert(i, pos)
+    self.ui.mark_dirty(i)
+  end
+
+  ## Replace input `i`'s current selection (or insert at the caret if none) with
+  ## `text` — one RMW. Caret positioning is the caller's job.
+  def var replace_selection_with(i: Int, text: String) -> nil
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    let had_sel = send > start
+    self.edit_value(i, do |cur: String|
+        var out = ""
+        var n = 0
+        for c in cur.chars
+          if n == start
+            out = "#{out}#{text}"
+          end
+          if !(had_sel && n >= start && n < send)
+            out = "#{out}#{c}"
+          end
+          n = n + 1
+        end
+        if start >= n
+          out = "#{out}#{text}"
+        end
+        out
+      end)
+  end
+
+  ## --- F3 measured-prefix caret geometry (docs/decisions/text-editing.md) ---
+  ## Measured advance width (px) of input `i`'s first `n` chars — the caret/
+  ## selection x within the field, relative to the text origin (x + pad_x). Uses
+  ## the injected measure seam (char-metric fallback when unset, so the default is
+  ## byte-identical to the old `caret * char_width` math). For a multi-line value,
+  ## the prefix is measured on the caret's own line (newlines reset the run).
+  def prefix_width(i: Int, n: Int) -> Int
+    if n <= 0
+      return 0
+    end
+    let line_start = self.line_start_of(i, n)
+    var idx = 0
+    var pre = ""
+    for c in self.input_value(i).chars
+      if idx >= line_start && idx < n
+        pre = "#{pre}#{c}"
+      end
+      idx = idx + 1
+    end
+    self.text_width(pre)
+  end
+
+  ## The char index in input `i` nearest pointer screen-x `x` — walk char prefixes
+  ## (measured) and pick the boundary closest to the click. Clamped to [0, len].
+  def char_index_at_x(i: Int, x: Int) -> Int
+    let origin = self.x_of(i) + pad_x()
+    let rel = x - origin
+    if rel <= 0
+      return 0
+    end
+    let len = self.input_value(i).size as Int
+    var n = 0
+    while n < len
+      let w_n = self.prefix_width(i, n)
+      let w_next = self.prefix_width(i, n + 1)
+      let mid = (w_n + w_next) / 2
+      if rel < mid
+        return n
+      end
+      n = n + 1
+    end
+    len
+  end
+
+  ## Extend input `i`'s selection: move the caret to the char under `x` while
+  ## keeping the anchor (a drag-select). Dirties the node.
+  def var extend_selection_to_x(i: Int, x: Int) -> nil
+    let c = self.char_index_at_x(i, x)
+    self.caret.insert(i, c)
+    self.ui.mark_dirty(i)
+  end
+
+  ## --- F3 line navigation (single String, '\n' separators; flat caret index) ---
+  ## Index of the start of the line containing char position `pos` in input `i`
+  ## (just after the previous '\n', or 0). For a single-line input this is 0.
+  def line_start_of(i: Int, pos: Int) -> Int
+    var start = 0
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= pos
+        return start
+      end
+      if c == 10 as Char
+        start = n + 1
+      end
+      n = n + 1
+    end
+    start
+  end
+
+  ## The 0-based line index of char position `pos` in input `i` (count of '\n'
+  ## strictly before `pos`).
+  def line_index_of(i: Int, pos: Int) -> Int
+    var lines = 0
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= pos
+        return lines
+      end
+      if c == 10 as Char
+        lines = lines + 1
+      end
+      n = n + 1
+    end
+    lines
+  end
+
+  ## Index of the end of the line containing `pos` in input `i` (just before the
+  ## next '\n', or the length). For a single-line input this is the length.
+  def line_end_of(i: Int, pos: Int) -> Int
+    var n = 0
+    for c in self.input_value(i).chars
+      if n >= pos && c == 10 as Char
+        return n
+      end
+      n = n + 1
+    end
+    n
+  end
+
+  ## Move input `i`'s caret one line up (`dir` -1) or down (+1), preserving the
+  ## column (char offset within the line, clamped to the target line's length).
+  ## `extend` keeps the anchor (shift-select). For a single-line input, up/down
+  ## clamp the caret to the ends. (Measured-x column preservation is filed; v1
+  ## preserves the CHAR column — exact for monospace, close enough otherwise.)
+  def var move_caret_line(i: Int, dir: Int, extend: Bool) -> nil
+    let caret = self.caret_of(i)
+    let cur_start = self.line_start_of(i, caret)
+    let col = caret - cur_start
+    if dir < 0
+      if cur_start <= 0
+        self.set_caret(i, 0, extend)
+        return
+      end
+      let prev_start = self.line_start_of(i, cur_start - 1)
+      let prev_end = cur_start - 1
+      var target = prev_start + col
+      if target > prev_end
+        target = prev_end
+      end
+      self.set_caret(i, target, extend)
+    else
+      let cur_end = self.line_end_of(i, caret)
+      let len = self.input_value(i).size as Int
+      if cur_end >= len
+        self.set_caret(i, len, extend)
+        return
+      end
+      let next_start = cur_end + 1
+      let next_end = self.line_end_of(i, next_start)
+      var target = next_start + col
+      if target > next_end
+        target = next_end
+      end
+      self.set_caret(i, target, extend)
+    end
+  end
+
+  ## --- F3 clipboard seam internals ---
+  ## Read the injected clipboard `get` closure ("" when unset).
+  def clip_read -> String
+    if !self.has_clipboard
+      return ""
+    end
+    match self.clip_get_fns.get(0)
+      Some(f) -> f.()
+      nil -> ""
+    end
+  end
+
+  ## Write `s` through the injected clipboard `set` closure (no-op when unset).
+  def var clip_write(s: String) -> nil
+    if !self.has_clipboard
+      return
+    end
+    let sc = s.clone
+    match self.clip_set_fns.get(0)
+      Some(f) -> f.(sc)
+      nil -> nil
+    end
+  end
+
+  ## --- F3 IME marked text (composition) ---
+  ## Clear input `i`'s marked (composition) text. Called before a committing edit.
+  def var clear_mark(i: Int) -> nil
+    self.mark_text.insert(i, "")
+    self.mark_start.insert(i, 0)
+    self.mark_len.insert(i, 0)
+  end
+
+  ## --- F3 undo (per-input bounded snapshot ring) ---
+  ## Push the CURRENT (value, caret) of input `i` onto its undo stack before a
+  ## mutating edit, coalescing rapid typing into one entry by clock distance
+  ## (within `undo_group_ms` of the last push → skip, extend the existing entry).
+  ## A new edit clears the redo stack. Caps the stack at `undo_cap` entries.
+  def var push_undo(i: Int) -> nil
+    let t = self.now
+    if self.undo_coalesces?(i, t)
+      self.undo_last_time.insert(i, t)
+      return
+    end
+    self.ensure_undo_arrays(i)
+    match self.undo_vals.get(i)
+      Some(a) -> a.push(self.value_cached(i))
+      nil -> nil
+    end
+    match self.undo_carets.get(i)
+      Some(a) -> a.push(self.caret_of(i))
+      nil -> nil
+    end
+    self.clear_redo(i)
+    self.undo_last_time.insert(i, t)
+  end
+
+  ## The CACHED value string of input `i` (the last-flushed reactive value, read
+  ## from `self.cache` — NO Mutex lock). Used by undo-snapshot + selection reads
+  ## that happen in the SAME frame as a value `update`/`set`: a live `peek` would
+  ## hold a second lock on the same handle across the frame and corrupt the value
+  ## (the one-lock-per-frame landmine). The cache equals the live value at the
+  ## start of each event frame (every edit flushes before the next), so this is
+  ## the sound snapshot source for an in-frame mutation.
+  def value_cached(i: Int) -> String { self.text_of(i) }
+
+  ## The selected substring read from the CACHE (no lock) — for `cut`, which reads
+  ## the selection then deletes it (an update) in one frame.
+  def selected_cached(i: Int) -> String
+    let start = self.sel_start_of(i)
+    let send = self.sel_end_of(i)
+    if send <= start
+      return ""
+    end
+    var out = ""
+    var n = 0
+    for c in self.value_cached(i).chars
+      if n >= start && n < send
+        out = "#{out}#{c}"
+      end
+      n = n + 1
+    end
+    out
+  end
+
+  ## Whether a fresh push for input `i` at time `t` should coalesce into the last
+  ## undo entry (rapid typing): there is an entry AND it was pushed within
+  ## `undo_group_ms`.
+  def undo_coalesces?(i: Int, t: Int) -> Bool
+    let depth = self.undo_depth(i)
+    if depth <= 0
+      return false
+    end
+    match self.undo_last_time.get(i)
+      Some(last) -> t - *last < undo_group_ms() && t - *last >= 0
+      nil -> false
+    end
+  end
+
+  ## Number of undo snapshots stored for input `i`.
+  def undo_depth(i: Int) -> Int
+    match self.undo_vals.get(i)
+      Some(a) -> a.size as Int
+      nil -> 0
+    end
+  end
+
+  ## Ensure input `i`'s undo arrays exist (lazily created on first push).
+  def var ensure_undo_arrays(i: Int) -> nil
+    if !self.undo_vals.key?(i)
+      let nv: Array[String] = Array.new
+      self.undo_vals.insert(i, nv)
+      let nc: Array[Int] = Array.new
+      self.undo_carets.insert(i, nc)
+    end
+  end
+
+  ## Drop input `i`'s redo stack (a fresh edit invalidates redo).
+  def var clear_redo(i: Int) -> nil
+    let nv: Array[String] = Array.new
+    self.redo_vals.insert(i, nv)
+    let nc: Array[Int] = Array.new
+    self.redo_carets.insert(i, nc)
+  end
+
+  public
+
+  ## Undo the last edit on the focused input: restore its previous (value, caret)
+  ## snapshot (pushing the current state onto the redo stack). No-op when nothing
+  ## is focused or the undo stack is empty.
+  def var undo -> nil
+    let i = self.focused
+    if i < 0 || !self.root.input_at(i)
+      return
+    end
+    let depth = self.undo_depth(i)
+    if depth <= 0
+      return
+    end
+    self.push_redo(i)
+    let prev_val = self.undo_pop_val(i)
+    let prev_caret = self.undo_pop_caret(i)
+    self.set_input_value(i, prev_val)
+    self.set_caret_collapsed(i, prev_caret)
+    self.undo_last_time.insert(i, 0 - undo_group_ms())
+  end
+
+  private
+
+  ## Push the current (value, caret) of input `i` onto its redo stack.
+  def var push_redo(i: Int) -> nil
+    self.ensure_redo_arrays(i)
+    match self.redo_vals.get(i)
+      Some(a) -> a.push(self.value_cached(i))
+      nil -> nil
+    end
+    match self.redo_carets.get(i)
+      Some(a) -> a.push(self.caret_of(i))
+      nil -> nil
+    end
+  end
+
+  ## Ensure input `i`'s redo arrays exist.
+  def var ensure_redo_arrays(i: Int) -> nil
+    if !self.redo_vals.key?(i)
+      let nv: Array[String] = Array.new
+      self.redo_vals.insert(i, nv)
+      let nc: Array[Int] = Array.new
+      self.redo_carets.insert(i, nc)
+    end
+  end
+
+  ## Pop + return the last undo value of input `i` ("" if empty).
+  def var undo_pop_val(i: Int) -> String
+    match self.undo_vals.get(i)
+      Some(a) -> match a.pop
+        Some(s) -> s.clone
+        nil -> ""
+      end
+      nil -> ""
+    end
+  end
+
+  ## Pop + return the last undo caret of input `i` (0 if empty).
+  def var undo_pop_caret(i: Int) -> Int
+    match self.undo_carets.get(i)
+      Some(a) -> match a.pop
+        Some(v) -> *v
+        nil -> 0
+      end
+      nil -> 0
+    end
+  end
+
+  ## Write input `i`'s value directly to `v` through a single `State.set` (one
+  ## lock; the value is computed without a read, so no peek+set pair).
+  def var set_input_value(i: Int, v: String) -> nil
+    let idx = self.root.value_index_at(i)
+    if idx < 0
+      return
+    end
+    let vc = v.clone
+    match self.root.values.get(idx)
+      Some(s) -> s.set(&var self.ui, vc)
+      nil -> nil
+    end
+  end
+
+  public
+
+  alias type_char text_input
+  alias key key_down
 end

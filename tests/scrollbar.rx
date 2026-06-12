@@ -1,0 +1,73 @@
+# Pins the F2 paint-only scrollbar (docs/LAYOUT.md F2): when a list's content
+# overflows its viewport, a thumb is drawn on the right edge whose size +
+# position come from the viewport / content / scroll ratios. row_height()=24.
+Tester.describe("F2 — scrollbar thumb geometry") do |t: &var Tester|
+  let over_list = { || App.build(
+      { |ui: &var Ui, root: &var Col| root.list(row_height() * 2) do |c: &var Col|
+        var i = 0
+        while i < 8
+          c.text("row")
+          i = i + 1
+        end
+      end },
+    ) }
+  let fit_list = { || App.build(
+      { |ui: &var Ui, root: &var Col| root.list(row_height() * 4) do |c: &var Col|
+        c.text("a")
+        c.text("b")
+      end },
+    ) }
+  t.it("no scrollbar when the content fits the viewport") do ||
+    var app = fit_list.()
+    t.expect(app.scrollbar_visible?(0)).to_eq(false)
+    t.expect(app.scrollbar_thumb_h(0)).to_eq(0)
+  end
+  t.it("thumb height is viewport^2 / content") do ||
+    var app = over_list.()
+    t.expect(app.scrollbar_visible?(0)).to_eq(true)
+    let vp = row_height() * 2
+    let content = row_height() * 8
+    t.expect(app.scrollbar_thumb_h(0)).to_eq(vp * vp / content)
+  end
+  t.it("thumb is at the viewport top when unscrolled") do ||
+    var app = over_list.()
+    t.expect(app.scrollbar_thumb_y(0)).to_eq(app.y_of(0))
+  end
+  t.it("thumb moves down proportionally to the scroll offset") do ||
+    var app = over_list.()
+    let vp = row_height() * 2
+    let content = row_height() * 8
+    let max_scroll = content - vp
+    let th = app.scrollbar_thumb_h(0)
+    let travel = vp - th
+    app.scroll_to(0, max_scroll / 2)
+    let expected = app.y_of(0) + travel * (max_scroll / 2) / max_scroll
+    t.expect(app.scrollbar_thumb_y(0)).to_eq(expected)
+  end
+  t.it("thumb sits flush at the bottom when fully scrolled") do ||
+    var app = over_list.()
+    let vp = row_height() * 2
+    let content = row_height() * 8
+    let max_scroll = content - vp
+    let th = app.scrollbar_thumb_h(0)
+    app.scroll_to(0, max_scroll)
+    t.expect(app.scrollbar_thumb_y(0)).to_eq(app.y_of(0) + vp - th)
+  end
+  t.it("paint records the scrollbar thumb on the list's right edge, on top") do ||
+    var app = over_list.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    let last = surface.size - 1
+    t.expect(surface.op_at(last)).to_eq(op_round_rect())
+    t.expect(surface.x_at(last)).to_eq(app.x_of(0) + app.w_of(0) - scrollbar_w())
+    t.expect(surface.w_at(last)).to_eq(scrollbar_w())
+    t.expect(surface.h_at(last)).to_eq(app.scrollbar_thumb_h(0))
+    t.expect(surface.y_at(last)).to_eq(app.scrollbar_thumb_y(0))
+  end
+  t.it("a fitting list paints NO scrollbar (ends with restore)") do ||
+    var app = fit_list.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    t.expect(surface.op_at(surface.size - 1)).to_eq(op_restore())
+  end
+end

@@ -1,0 +1,119 @@
+# Pins the single-line text input (docs/DSL.md): a focusable field whose value
+# is a reactive State[String], edited via key events at a caret. Headless —
+# asserted against the programmatic key API + RecordingSurface, no canvas.
+Tester.describe("text input — focus, type, caret, backspace") do |t: &var Tester|
+  # An input 100px wide bound to a String state, with a label above it so
+  # there are two nodes (label = 0, input = 1).
+  let form = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let name = ui.state_str("")
+      root.text("name:")             # node 0
+      root.input(name, 100)          # node 1
+    })
+  }
+
+  # The input row is the second row (y = row_height).
+  let input_y = { || row_height() + 2 }
+
+  t.it("pointer_down on the input focuses it; nothing is focused at first") do
+    var app = form.()
+    t.expect(app.focused_node).to_eq(-1)
+    app.pointer_down(4, input_y.())
+    t.expect(app.focused_node).to_eq(1)
+  end
+
+  t.it("typing printable chars appends to the value and advances the caret") do
+    var app = form.()
+    app.pointer_down(4, input_y.())   # focus the input
+    app.type_char(104)                # 'h'
+    app.type_char(105)                # 'i'
+    app.flush
+    t.expect(app.text_of(1)).to_eq("hi")
+    t.expect(app.caret_of(1)).to_eq(2)
+  end
+
+  t.it("an UNFOCUSED input ignores keys") do
+    var app = form.()
+    app.type_char(120)                # 'x' with nothing focused
+    app.flush
+    t.expect(app.text_of(1)).to_eq("")
+    t.expect(app.caret_of(1)).to_eq(0)
+  end
+
+  t.it("backspace deletes the char before the caret and retreats it") do
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.type_char(97)                 # 'a'
+    app.type_char(98)                 # 'b'
+    app.type_char(99)                 # 'c'
+    app.flush
+    app.key(key_backspace())
+    app.flush
+    t.expect(app.text_of(1)).to_eq("ab")
+    t.expect(app.caret_of(1)).to_eq(2)
+  end
+
+  t.it("left/right move the caret without editing; inserts land at the caret") do
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.type_char(97)                 # 'a'
+    app.type_char(99)                 # 'c'  -> "ac", caret 2
+    app.flush
+    app.key(key_left())               # caret -> 1, value unchanged
+    app.flush
+    t.expect(app.text_of(1)).to_eq("ac")
+    t.expect(app.caret_of(1)).to_eq(1)
+    app.type_char(98)                 # insert 'b' at caret 1 -> "abc"
+    app.flush
+    t.expect(app.text_of(1)).to_eq("abc")
+    t.expect(app.caret_of(1)).to_eq(2)
+  end
+
+  t.it("caret clamps at both ends") do
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.key(key_left())               # already at 0
+    t.expect(app.caret_of(1)).to_eq(0)
+    app.type_char(122)                # 'z' -> caret 1
+    app.flush
+    app.key(key_right())              # already at end (len 1)
+    t.expect(app.caret_of(1)).to_eq(1)
+  end
+
+  t.it("the input is sized to its fixed width, one line tall") do
+    var app = form.()
+    t.expect(app.w_of(1)).to_eq(100)
+    t.expect(app.h_of(1)).to_eq(row_height())
+    t.expect(app.y_of(1)).to_eq(row_height())
+  end
+
+  t.it("paint records the box, the text, and a caret rect after the text") do
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.type_char(104)                # 'h'
+    app.type_char(105)                # 'i'
+    app.flush
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + label text + input box + input text + caret  (5)
+    t.expect(surface.size).to_eq(5)
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    t.expect(surface.command_at(1)).to_eq("text('name:',4,16)")
+    # input box at (0, row_height), 100 wide, one row tall
+    t.expect(surface.command_at(2)).to_eq("round_rect(0,#{row_height()},100,#{row_height()},0,245,245,245)")
+    t.expect(surface.command_at(3)).to_eq("text('hi',4,#{row_height() + baseline_drop()})")
+    # caret: a 1px-wide rect after "hi" (2 chars), inset by pad_x
+    t.expect(surface.command_at(4)).to_eq("rect(#{pad_x() + 2 * char_width()},#{row_height() + 4},1,#{row_height() - 8},20,20,20)")
+  end
+
+  t.it("an unfocused input paints no caret") do
+    var app = form.()
+    app.type_char(104)                # ignored (not focused)
+    app.flush
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + label + box + (empty) text, NO caret
+    t.expect(surface.size).to_eq(4)
+    t.expect(surface.command_at(3)).to_eq("text('',4,#{row_height() + baseline_drop()})")
+  end
+end

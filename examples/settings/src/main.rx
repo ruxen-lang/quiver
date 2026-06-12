@@ -1,0 +1,307 @@
+## settings — a multi-file quiver example that doubles as the "how to write a
+## quiver app" tutorial. Read state.rx (model) and views.rx (UI) alongside this.
+##
+## This is a binary package: the only place ruxen v1 lets quiver (L2) and canvas
+## (L1) symbols meet, so the canvas-facing shell (window + event loop + the paint
+## backend) lives HERE, never in quiver's `src/`.
+##
+## The windowed path uses a DIRECT paint backend: `SkiaPaint` is the binary's own
+## `PaintSurface` implementor (ruxen Q17 lets quiver's generic paint pass
+## monomorphize against a consumer-defined implementor), so quiver's paint pass
+## issues Skia calls as it visits each node — one walk, no recorded mirror. The
+## headless path still paints into quiver's platform-free `RecordingSurface` and
+## narrates, so CI / no-display runs exercise the same pipeline.
+## See docs/decisions/direct-paint-backend.md.
+##
+## With a display it opens a live OS window driven by the real event stream;
+## headless (CI / no display) it falls back to synthetic events through the SAME
+## pipeline, so the app runs anywhere.
+## ---------------------------------------------------------------------------
+## The app: compose the views into one column. This is the whole UI definition.
+##
+## NOTE the structure: every `ui.state*` handle is minted here (the build block
+## owns `&var Ui`), then handed to each view by reference. The block runs ONCE —
+## quiver reacts by re-running the `dyn_text` closures of existing nodes, not by
+## rebuilding the tree. (See README: that's the framework's reactivity model.)
+## ---------------------------------------------------------------------------
+def build_app -> App { App.build(do |ui: &var Ui, root: &var Col|
+    let name = ui.state_str("Ada")
+    let notify = ui.state_bool(true)
+    let dark = ui.state_bool(false)
+    let volume = ui.state(40)
+    let theme = ui.state(0)
+    let saves = ui.state(0)
+    header(&var *root, &name, &dark)
+    name_field(&var *root, &name)
+    toggles(&var *root, &notify, &dark)
+    volume_control(&var *root, &volume)
+    theme_picker(&var *root, &theme)
+    device_list(&var *root)
+    save_bar(&var *root, &saves)
+  end) }
+
+def main
+  puts("quiver settings panel — multi-file example")
+  let w = 320
+  let h = 360
+  match Window.open("Settings", w, h)
+    Ok(win) -> drive(win)
+    Err(e) -> puts("cannot create canvas: #{e}")
+  end
+end
+
+## Own the window, build the app, and run it — windowed if an OS window opens,
+## otherwise headless with synthetic events through the real pipeline.
+def drive(win0: Window) -> nil
+  var win = win0
+  var app = build_app
+  let shown = match win.show_gpu_scaled(2)
+      Ok(_) -> true
+      Err(e) -> announce_headless(e)
+    end
+  if !shown
+    var surface = RecordingSurface.new
+    run_headless(&var app, &var surface)
+    return
+  end
+  run_windowed(&var win, &var app)
+end
+
+## Headless demo: paint the first frame, then drive a few synthetic edits and
+## show that targeted repaint only touches the changed nodes.
+def run_headless(app: &var App, surface: &var RecordingSurface) -> nil
+  puts("")
+  puts("first frame (full paint): #{frame_count(app,surface)} draw commands")
+  puts("")
+  puts("toggle dark mode -> header + toggles line repaint:")
+  let cb = find_kind(app, kind_checkbox(), 1)
+  if cb >= 0
+    app.pointer_down(app.x_of(cb) + 2, app.y_of(cb) + 2)
+    report_repaint(app, surface)
+  end
+  puts("")
+  puts("drag volume slider to max:")
+  let sl = find_kind(app, kind_slider(), 0)
+  if sl >= 0
+    app.pointer_down(app.x_of(sl) + 2, app.y_of(sl) + 2)
+    app.drag_to(sl, app.x_of(sl) + 1000)
+    report_repaint(app, surface)
+  end
+  puts("")
+  puts("open theme select, choose option 2:")
+  let se = find_kind(app, kind_select(), 0)
+  if se >= 0
+    app.pointer_down(app.x_of(se) + 2, app.y_of(se) + 2)
+    app.pointer_down(app.x_of(se) + 2, app.y_of(se) + app.h_of(se) + row_height() * 2 + 2)
+    report_repaint(app, surface)
+  end
+  puts("")
+  puts("press Save twice:")
+  let bt = find_kind(app, kind_button(), 0)
+  if bt >= 0
+    app.pointer_down(app.x_of(bt) + 2, app.y_of(bt) + 2)
+    report_repaint(app, surface)
+    app.pointer_down(app.x_of(bt) + 2, app.y_of(bt) + 2)
+    report_repaint(app, surface)
+  end
+  puts("")
+  puts("Save button colour pulse (F4 — fades green -> grey):")
+  if bt >= 0
+    pulse_save(&var app, bt)
+    var f = 0
+    while f < 5
+      app.tick
+      app.flush
+      puts("  frame #{f}: button green channel = #{app.anim_color_g_of(bt,200)}")
+      f = f + 1
+    end
+  end
+  puts("")
+  puts("done (headless). The same App drives the windowed path identically.")
+end
+
+## The live event loop: forward real pointer + key events into App's dispatch,
+## then flush + repaint only when something changed. Painting is DIRECT — quiver's
+## paint pass drives `SkiaPaint` straight onto canvas; no recorded mirror.
+def run_windowed(win: &var Window, app: &var App) -> nil
+  app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
+  app.set_clipboard({ || clipboard_get }, { |s: String| clipboard_put(s) })
+  let save_btn = find_kind(app, kind_button(), 0)
+  paint_frame(win, app)
+  var running = true
+  while running
+    match win.poll_event
+      Some(ev) -> match ev
+        Event.PointerDown(x, y) -> pointer_down_pulse(&var *app, x as Int, y as Int, save_btn)
+        Event.PointerMove(x, y) -> app.pointer_move(x as Int, y as Int)
+        Event.PointerUp(x, y) -> app.pointer_up(x as Int, y as Int)
+        Event.TextInput(cp) -> app.text_input(cp)
+        Event.KeyDown(k) -> app.key_down(k)
+        Event.Scroll(dx, dy) -> app.scroll(dx as Int, dy as Int)
+        Event.Resize(ww, hh) -> app.resize(ww as Int, hh as Int)
+        Event.CloseRequested -> running = false
+        _ -> nil
+      end
+      nil -> nil
+    end
+    let stepped = app.tick
+    let dirty = app.flush
+    if stepped || dirty.size as Int > 0
+      paint_frame(win, app)
+    end
+    win.sleep_ms(16)
+  end
+  win.hide
+end
+
+## ---------------------------------------------------------------------------
+## Helpers (pure shell glue — none of this is quiver-specific).
+## ---------------------------------------------------------------------------
+## Full-repaint a frame; return the number of draw commands recorded.
+def frame_count(app: &var App, surface: &var RecordingSurface) -> Int
+  surface.reset
+  paint_all(app, surface)
+  surface.size
+end
+
+## Flush after an edit and print how many nodes repainted (the targeted set).
+def report_repaint(app: &var App, surface: &var RecordingSurface) -> nil
+  let dirty = app.flush
+  puts("  repainted #{dirty.size as Int} node(s)")
+  surface.reset
+  paint_all(app, surface)
+end
+
+## Find the `nth` (0-based) node of a given kind in build order, or -1. Lets the
+## headless demo target widgets by role without hard-coding node ids.
+def find_kind(app: &var App, kind: Int, nth: Int) -> Int
+  var i = 0
+  var seen = 0
+  let n = app.root.size
+  while i < n
+    if app.root.kind_at(i) == kind
+      if seen == nth
+        return i
+      end
+      seen = seen + 1
+    end
+    i = i + 1
+  end
+  -1
+end
+
+## Dispatch a pointer-down and, when it lands on the Save button, start the F4
+## colour pulse — a quick ease-out tween to a green highlight, then (on completion)
+## an ease-in tween back to the default grey. The window loop's `app.tick` advances
+## both legs; only the button repaints (targeted).
+def pointer_down_pulse(app: &var App, x: Int, y: Int, save_btn: Int) -> nil
+  let hit = app.pointer_down(x, y)
+  if hit >= 0 && hit == save_btn
+    pulse_save(&var *app, save_btn)
+  end
+end
+
+## Start the Save-button pulse: flash to a green highlight instantly, then tween
+## back to the default grey over ~20 frames (ease-out, so it fades quickly then
+## settles). One self-contained tween per click — a visible "flash and fade".
+def pulse_save(app: &var App, btn: Int) -> nil
+  app.tween_color(btn, 120, 200, 140, 200, 200, 200, 20, curve_ease_out())
+end
+
+## The Skia clipboard get/set the F3 seam wires to (canvas's system clipboard).
+def clipboard_get -> String
+  match Window.clipboard_text
+    Ok(s) -> s
+    Err(_) -> ""
+  end
+end
+
+def clipboard_put(s: String) -> nil
+  let _ = Window.set_clipboard_text(s)
+end
+
+## SkiaPaint — this binary's DIRECT `PaintSurface` implementor (ruxen Q17). quiver's
+## generic paint pass (`paint_all`/`paint_dirty`) monomorphizes against it and calls
+## these methods as it visits each node, issuing canvas/Skia draws on the spot — no
+## recorded mirror, one walk. It holds a borrow of the live `Canvas` for the frame
+## (constructed inside the begin/end bracket in `paint_frame`). Each method is the
+## op→canvas mapping that used to live in `replay`, transliterated 1:1.
+class SkiaPaint
+  canvas: &var Canvas
+
+  def init(canvas: &var Canvas) { self.canvas = canvas }
+
+  def var fill_clear(r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let _ = self.canvas.clear(col)
+  end
+
+  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_rect(rect, col)
+  end
+
+  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let label = text.clone
+    let _ = self.canvas.draw_text(label, x as Float32, y as Float32, col)
+  end
+
+  def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_round_rect(rect, radius as Float32, col)
+  end
+
+  def var stroke_round_rect(
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int,
+    radius: Int,
+    width: Int,
+    r: Int,
+    g: Int,
+    b: Int,
+  ) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.stroke_round_rect(rect, radius as Float32, width as Float32, col)
+  end
+
+  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+    let _ = self.canvas.save
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.clip_rect(rect)
+  end
+
+  def var push_translate(dx: Int, dy: Int) -> nil
+    let _ = self.canvas.translate(dx as Float32, dy as Float32)
+  end
+
+  def var pop_state -> nil
+    let _ = self.canvas.restore
+  end
+
+  include PaintSurface
+end
+
+## Paint one frame DIRECTLY to the OS window: open a frame, drive quiver's paint
+## pass through `SkiaPaint` (which issues the Skia calls as it walks), end + present.
+def paint_frame(win: &var Window, app: &var App) -> nil
+  match win.canvas.begin_frame
+    Ok(_) -> nil
+    Err(e) -> puts("begin_frame: #{e}")
+  end
+  var skia = SkiaPaint.new(&var win.canvas)
+  paint_all(app, &var skia)
+  let _ = win.canvas.end_frame
+  let _ = win.present
+end
+
+## Single-statement match-arm helper: report the headless fallback, yield false.
+def announce_headless(e: String) -> Bool
+  puts("(no OS window: #{e}) — running headless")
+  false
+end

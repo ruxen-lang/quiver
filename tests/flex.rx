@@ -1,0 +1,154 @@
+# Pins the F1 layout-completeness features on the own-flex pass (docs/LAYOUT.md
+# F1 addendum): per-side padding, gap, cross-axis align, main-axis justify, and
+# flex grow. Geometry is asserted to the pixel; a hit-test pin proves clicks land
+# where the geometry says. char_width()=8, pad_x()=4, row_height()=24.
+Tester.describe("F1 — flex: padding / gap / align / justify / grow") do |t: &var Tester|
+  let w_for = { |chars: Int| chars * char_width() + pad_x() * 2 }
+  t.it("per-side padding insets the child and grows the box per side") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.row_styled(Style.new.pad_sides(2, 4, 6, 8)) do |c: &var Col|
+          c.text("x")
+        end },
+      )
+    t.expect(app.x_of(1)).to_eq(2)
+    t.expect(app.y_of(1)).to_eq(4)
+    t.expect(app.w_of(0)).to_eq(w_for.(1) + 2 + 6)
+    t.expect(app.h_of(0)).to_eq(row_height() + 4 + 8)
+  end
+  t.it("uniform pad(n) still equals 2*n each axis (back-compat)") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.row_styled(Style.new.pad(8)) do |c: &var Col|
+          c.text("x")
+        end },
+      )
+    t.expect(app.x_of(1)).to_eq(8)
+    t.expect(app.y_of(1)).to_eq(8)
+    t.expect(app.w_of(0)).to_eq(w_for.(1) + 16)
+    t.expect(app.h_of(0)).to_eq(row_height() + 16)
+  end
+  t.it("gap spaces adjacent row children on the main axis (not the ends)") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.row_styled(Style.new.gap(10)) do |c: &var Col|
+          c.text("ab")
+          c.text("cd")
+          c.text("ef")
+        end },
+      )
+    t.expect(app.x_of(1)).to_eq(0)
+    t.expect(app.x_of(2)).to_eq(w_for.(2) + 10)
+    t.expect(app.x_of(3)).to_eq((w_for.(2) + 10) * 2)
+    t.expect(app.w_of(0)).to_eq(w_for.(2) * 3 + 10 * 2)
+  end
+  t.it("gap spaces col children on the Y axis") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.col_styled(Style.new.gap(6)) do |c: &var Col|
+          c.text("a")
+          c.text("b")
+        end },
+      )
+    t.expect(app.y_of(1)).to_eq(0)
+    t.expect(app.y_of(2)).to_eq(row_height() + 6)
+    t.expect(app.h_of(0)).to_eq(row_height() * 2 + 6)
+  end
+  t.it("cross-axis align centers a short child in a taller row band") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.row_styled(Style.new.align(align_center())) do |c: &var Col|
+          c.text("x")
+          c.col() do |c2: &var Col|
+            c.text("a")
+            c.text("b")
+          end
+        end },
+      )
+    t.expect(app.h_of(0)).to_eq(row_height() * 2)
+    t.expect(app.y_of(1)).to_eq(12)
+    t.expect(app.y_of(2)).to_eq(0)
+  end
+  t.it("cross-axis align end pushes a short child to the band bottom") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.row_styled(Style.new.align(align_end())) do |c: &var Col|
+          c.text("x")
+          c.col() do |c2: &var Col|
+            c.text("a")
+            c.text("b")
+          end
+        end },
+      )
+    t.expect(app.y_of(1)).to_eq(row_height())
+  end
+  t.it("cross-axis stretch resizes a child to the container cross extent") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.col_styled(Style.new.align(align_stretch())) do |c: &var Col|
+          c.text("wide label")
+          c.text("x")
+        end },
+      )
+    let col_w = app.w_of(0)
+    t.expect(app.w_of(2)).to_eq(col_w)
+    t.expect(app.w_of(1)).to_eq(col_w)
+  end
+  t.it("justify center centers content within a stretched row") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.col_styled(Style.new.align(align_stretch())) do |c: &var Col|
+          c.text("a wide sibling row")
+          c.row_styled(Style.new.justify(just_center())) { |c2: &var Col| c.text("hi") }
+        end },
+      )
+    let col_w = app.w_of(0)
+    let leftover = col_w - w_for.(2)
+    t.expect(app.x_of(3)).to_eq(leftover / 2)
+  end
+  t.it("justify end right-aligns content within a stretched row") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.col_styled(Style.new.align(align_stretch())) do |c: &var Col|
+          c.text("a wide sibling row")
+          c.row_styled(Style.new.justify(just_end())) { |c2: &var Col| c.text("hi") }
+        end },
+      )
+    let col_w = app.w_of(0)
+    t.expect(app.x_of(3)).to_eq(col_w - w_for.(2))
+  end
+  t.it("justify space_between pushes first to start, last to end") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.col_styled(Style.new.align(align_stretch())) do |c: &var Col|
+          c.text("a really wide sibling row here")
+          c.row_styled(Style.new.justify(just_space_between())) do |c2: &var Col|
+            c.text("ab")
+            c.text("cd")
+          end
+        end },
+      )
+    let col_w = app.w_of(0)
+    t.expect(app.x_of(3)).to_eq(0)
+    t.expect(app.x_of(4)).to_eq(col_w - w_for.(2))
+  end
+  t.it("grow distributes leftover main-axis space by weight") do ||
+    var app = App.build(
+        { |ui: &var Ui, root: &var Col| root.col_styled(Style.new.align(align_stretch())) do |c: &var Col|
+          c.text("a wide sibling row here ok")
+          c.row() do |c2: &var Col|
+            c.row_styled(Style.new.grow(1)) { |g: &var Col| c.text("ab") }
+            c.row_styled(Style.new.grow(3)) { |g: &var Col| c.text("cd") }
+          end
+        end },
+      )
+    let col_w = app.w_of(0)
+    let leftover = col_w - w_for.(2) - w_for.(2)
+    let share1 = leftover * 1 / 4
+    t.expect(app.w_of(3)).to_eq(w_for.(2) + share1)
+    t.expect(app.w_of(3) + app.w_of(5)).to_eq(col_w)
+    t.expect(app.x_of(5)).to_eq(app.x_of(3) + app.w_of(3))
+  end
+  t.it("hit-test lands on the gapped child at its laid-out x") do ||
+    var app = App.build(do |ui: &var Ui, root: &var Col|
+          let c0 = ui.state(0)
+          root.row_styled(Style.new.gap(10)) do |c: &var Col|
+            c.text("ab")
+            c.button("go", { |ui2: &var Ui| c0.update(ui2, { |v| v + 1 }) })
+          end
+        end)
+    let bx = app.x_of(2)
+    t.expect(app.hit_test(bx + 1, 1)).to_eq(2)
+    t.expect(app.hit_test(bx - 5, 1)).to_eq(-1)
+  end
+end

@@ -1,0 +1,138 @@
+# Pins F2 — pixel scrolling, drag-scroll + fling momentum (deterministic via the
+# injected clock seam), and tap vs long-press recognizers (docs/LAYOUT.md F2).
+# row_height()=24. A tall list gives plenty of scroll range.
+Tester.describe("F2 — pixel scroll / fling / long-press") do |t: &var Tester|
+  let tall_list = { || App.build(
+      { |ui: &var Ui, root: &var Col| root.list(row_height() * 2) do |c: &var Col|
+        var i = 0
+        while i < 10
+          c.text("row")
+          i = i + 1
+        end
+      end },
+    ) }
+  t.it("wheel scroll moves by the line factor (default = row_height) in px") do ||
+    var app = tall_list.()
+    app.pointer_move(2, row_height() + 2)
+    app.scroll(0, 0 - 1)
+    t.expect(app.scroll_of(0)).to_eq(row_height())
+  end
+  t.it("set_scroll_line overrides the wheel pixel factor") do ||
+    var app = tall_list.()
+    app.set_scroll_line(10)
+    t.expect(app.scroll_line_px).to_eq(10)
+    app.pointer_move(2, row_height() + 2)
+    app.scroll(0, 0 - 3)
+    t.expect(app.scroll_of(0)).to_eq(30)
+  end
+  t.it("the default clock is a frame counter advanced by tick") do ||
+    var app = tall_list.()
+    t.expect(app.clocked?).to_eq(false)
+    t.expect(app.now).to_eq(0)
+    app.tick
+    app.tick
+    t.expect(app.now).to_eq(2)
+  end
+  t.it("set_clock injects a real clock (now reads it, not the counter)") do ||
+    var app = tall_list.()
+    var clk = Ui.new
+    let ms = clk.state(1000)
+    app.set_clock({ || ms.peek })
+    t.expect(app.clocked?).to_eq(true)
+    t.expect(app.now).to_eq(1000)
+    app.tick
+    t.expect(app.now).to_eq(1000)
+  end
+  t.it("dragging a list scrolls it by the pointer delta") do ||
+    var app = tall_list.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(2, row_height() + 2)
+    ms.set(&var clk, 10)
+    app.pointer_move(2, row_height() + 2 - 20)
+    t.expect(app.scroll_of(0)).to_eq(20)
+  end
+  t.it("releasing a drag with velocity flings; tick steps + decays it") do ||
+    var app = tall_list.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(2, row_height() + 2)
+    ms.set(&var clk, 10)
+    app.pointer_move(2, row_height() + 2 - 30)
+    t.expect(app.scroll_of(0)).to_eq(30)
+    app.pointer_up(2, row_height() + 2 - 30)
+    app.tick
+    t.expect(app.scroll_of(0)).to_eq(33)
+    app.tick
+    t.expect(app.scroll_of(0)).to_eq(35)
+    app.tick
+    t.expect(app.scroll_of(0)).to_eq(36)
+    t.expect(app.tick).to_eq(false)
+    t.expect(app.scroll_of(0)).to_eq(36)
+  end
+  t.it("a fling clamps at the end and stops") do ||
+    var app = tall_list.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    let max_off = app.content_height_of(0) - row_height() * 2
+    app.pointer_down(2, row_height() + 2)
+    ms.set(&var clk, 1)
+    app.pointer_move(2, row_height() + 2 - 500)
+    app.pointer_up(2, row_height() + 2 - 500)
+    var n = 0
+    while n < 20
+      app.tick
+      n = n + 1
+    end
+    t.expect(app.scroll_of(0)).to_eq(max_off)
+  end
+  let press_app = { || App.build(do |ui: &var Ui, root: &var Col|
+        let taps = ui.state(0)
+        let longs = ui.state(0)
+        root.button("hit", { |ui2: &var Ui| taps.update(ui2, { |v| v + 1 }) })
+        root.long_press({ |ui2: &var Ui| longs.update(ui2, { |v| v + 1 }) })
+        root.dyn_text({ |ui2: &var Ui| "taps:#{taps.get(ui2)} longs:#{longs.get(ui2)}" })
+      end) }
+  t.it("a quick down+up is a tap (button handler), not a long-press") do ||
+    var app = press_app.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(2, 2)
+    ms.set(&var clk, 50)
+    app.pointer_up(2, 2)
+    app.flush
+    t.expect(app.text_of(1)).to_eq("taps:1 longs:0")
+  end
+  t.it("holding past the threshold fires the long-press once") do ||
+    var app = press_app.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(2, 2)
+    ms.set(&var clk, long_press_ms())
+    let fired = app.tick
+    t.expect(fired).to_eq(true)
+    app.flush
+    t.expect(app.text_of(1)).to_eq("taps:1 longs:1")
+    ms.set(&var clk, long_press_ms() * 2)
+    t.expect(app.tick).to_eq(false)
+    app.flush
+    t.expect(app.text_of(1)).to_eq("taps:1 longs:1")
+  end
+  t.it("moving past slop before the threshold cancels the long-press") do ||
+    var app = press_app.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(2, 2)
+    app.pointer_move(2 + gesture_slop() + 5, 2)
+    ms.set(&var clk, long_press_ms())
+    t.expect(app.tick).to_eq(false)
+    app.flush
+    t.expect(app.text_of(1)).to_eq("taps:1 longs:0")
+  end
+end

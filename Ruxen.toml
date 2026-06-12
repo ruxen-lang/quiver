@@ -7,8 +7,17 @@ description = "L2 framework for the Ruxen GUI stack: fine-grained reactive signa
 [build]
 type = "library"
 
-[dependencies]
-# L2 depends on the L1 engine for windowing, input, and the 2D canvas.
-# Published git dependency so anyone depending on quiver pulls canvas
-# transitively — no need to vendor or path-link L1 by hand.
-canvas = { git = "https://github.com/ruxen-lang/canvas.git", branch = "master" }
+# No [dependencies] on canvas — and that is deliberate.
+#
+# quiver (L2) is platform-AGNOSTIC: its src/ and tests/ contain zero canvas
+# (L1) symbols (paint crosses the boundary as plain Ints/Strings only). An app
+# chooses its rendering engine and declares BOTH quiver and an engine (canvas)
+# itself — see examples/*/Ruxen.toml. This is what lets quiver target any
+# backend, not just canvas.
+#
+# A hard canvas dependency here also BREAKS `ruxen test`: ruxen v1 flat-merges a
+# dependency's full src into the consumer's build (Q16), so canvas's FFI-calling
+# method bodies would be pulled into quiver's test EXECUTABLE without canvas's
+# C runtime/system_libs linked → undefined `ruxen_canvas_*` at link. (Tracked as
+# a ruxen Q-candidate: flat-merge of an FFI dependency into a test/binary build
+# should be demand-driven or link the dep's C runtime.)

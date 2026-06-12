@@ -71,6 +71,13 @@ dyn_text({ |ui| "count: #{count.get(ui)}" })
 drop), so every `State` helper takes the lock at most once and never calls
 another locking helper while holding it. Keep to one lock per stack frame.
 
+This bites **read-modify-write**: a `peek` followed by a `set` on the same
+handle in one frame holds two locks at once (the `peek` guard lives until the
+calling frame exits, even when `peek`/`set` are in separate sub-methods) and
+the value corrupts. Use a single `update(ui, { |cur| … })` — it reads and
+writes under one lock. The text input's editing (`insert`/`backspace`) is built
+this way (`App.edit_value`); a lone `peek` with no `set` in the frame is fine.
+
 ## Open detail (revisit as the language grows)
 
 - **Handle lifetime under future `Drop` semantics.** Stored closures capture

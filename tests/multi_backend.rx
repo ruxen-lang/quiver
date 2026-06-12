@@ -1,0 +1,203 @@
+# Multi-backend pin (ruxen Q17, docs/decisions/direct-paint-backend.md).
+#
+# Until Q17 landed, quiver's generic paint pass only resolved against a SINGLE
+# PaintSurface implementor (RecordingSurface, in-package). The windowed examples
+# worked around it by recording into RecordingSurface and replaying onto canvas.
+# Q17 lets `paint_all[S: PaintSurface]` monomorphize against a SECOND implementor
+# defined in the consuming program — which is exactly how the examples now paint
+# DIRECTLY onto Skia (their own SkiaPaint implementor), no recorded mirror.
+#
+# The suite can't see canvas, so this pins the GENERIC-NESS canvas-free: a second
+# in-test implementor (TallySurface, a per-op counter) is driven by the SAME paint
+# pass over the SAME tree as RecordingSurface, and the tally's per-op counts are
+# asserted to match the recording's op-list breakdown. If a future change narrows
+# a paint-pass signature back to a concrete `&var RecordingSurface` (collapsing to
+# one backend), this test stops compiling or stops matching. It pins "the framework
+# drives N paint backends" forever, with no canvas dependency.
+
+# A SECOND PaintSurface implementor (alongside RecordingSurface). It records
+# nothing but a per-op-kind tally, so we can compare its counts against the
+# recording's structured op list for the identical tree.
+class TallySurface
+  include PaintSurface
+  n_clear: Int
+  n_rect: Int
+  n_text: Int
+  n_round_rect: Int
+  n_stroke_rect: Int
+  n_save: Int
+  n_clip: Int
+  n_translate: Int
+  n_restore: Int
+
+  def init
+    self.n_clear = 0
+    self.n_rect = 0
+    self.n_text = 0
+    self.n_round_rect = 0
+    self.n_stroke_rect = 0
+    self.n_save = 0
+    self.n_clip = 0
+    self.n_translate = 0
+    self.n_restore = 0
+  end
+
+  def var fill_clear(r: Int, g: Int, b: Int) -> nil
+    self.n_clear = self.n_clear + 1
+  end
+
+  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+    self.n_rect = self.n_rect + 1
+  end
+
+  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+    self.n_text = self.n_text + 1
+  end
+
+  def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
+    self.n_round_rect = self.n_round_rect + 1
+  end
+
+  def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+    self.n_stroke_rect = self.n_stroke_rect + 1
+  end
+
+  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+    # push_clip issues a save THEN a clip (mirrors RecordingSurface).
+    self.n_save = self.n_save + 1
+    self.n_clip = self.n_clip + 1
+  end
+
+  def var push_translate(dx: Int, dy: Int) -> nil
+    self.n_translate = self.n_translate + 1
+  end
+
+  def var pop_state -> nil
+    self.n_restore = self.n_restore + 1
+  end
+
+  # Total ops issued (every op-issuing call bumps exactly one counter, except
+  # push_clip which legitimately issues two — matching the recording).
+  def total -> Int
+    self.n_clear + self.n_rect + self.n_text + self.n_round_rect +
+      self.n_stroke_rect + self.n_save + self.n_clip + self.n_translate +
+      self.n_restore
+  end
+end
+
+Tester.describe("paint — multiple backends, one generic pass (ruxen Q17)") do |t: &var Tester|
+  # Count how many recorded commands carry op-code `op` (test-local helper:
+  # test files synthesize into `def main`, so helpers are let-closures, not
+  # top-level defs — see CLAUDE.md landmines).
+  let count_op = { |surface: &RecordingSurface, op: Int|
+    var i = 0
+    var n = 0
+    let total = surface.size
+    while i < total
+      if surface.op_at(i) == op
+        n = n + 1
+      end
+      i = i + 1
+    end
+    n
+  }
+
+  # Find the first checkbox node id in the tree, or -1.
+  let find_checkbox = { |app: &App|
+    var i = 0
+    let n = app.root.size
+    var found = -1
+    while i < n
+      if app.root.checkbox_at(i)
+        found = i
+        i = n
+      end
+      i = i + 1
+    end
+    found
+  }
+
+  # A tree that exercises every PaintSurface op: clear (always), text (leaf +
+  # checkbox label + list child), rect (checkbox mark is conditional; the styled
+  # box uses round/stroke), round_rect + stroke_rect (styled row background +
+  # border), and save/clip/translate/restore (the list wraps its children).
+  let mixed_app = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let on = ui.state_bool(true)
+      root.text("Settings")
+      let boxed = Style.new.background(230, 230, 230).border(2, 100, 100, 100).radius(4)
+      root.row_styled(boxed) do |c: &var Col|
+        c.text("inside the box")
+      end
+      root.checkbox(on, "enabled")
+      root.list(row_height() * 3) do |c: &var Col|
+        c.text("row a")
+        c.text("row b")
+      end
+    })
+  }
+
+  t.it("RecordingSurface and TallySurface receive the identical op stream") do
+    var app = mixed_app.()
+
+    var rec = RecordingSurface.new
+    paint_all(&app, &var rec)
+
+    var tally = TallySurface.new
+    paint_all(&app, &var tally)
+
+    # Both backends were driven by the SAME generic pass over the SAME tree, so
+    # the tally's per-op counts must equal the recording's op-list breakdown.
+    t.expect(tally.n_clear).to_eq(count_op.(&rec, op_clear()))
+    t.expect(tally.n_rect).to_eq(count_op.(&rec, op_rect()))
+    t.expect(tally.n_text).to_eq(count_op.(&rec, op_text()))
+    t.expect(tally.n_round_rect).to_eq(count_op.(&rec, op_round_rect()))
+    t.expect(tally.n_stroke_rect).to_eq(count_op.(&rec, op_stroke_rect()))
+    t.expect(tally.n_save).to_eq(count_op.(&rec, op_save()))
+    t.expect(tally.n_clip).to_eq(count_op.(&rec, op_clip()))
+    t.expect(tally.n_translate).to_eq(count_op.(&rec, op_translate()))
+    t.expect(tally.n_restore).to_eq(count_op.(&rec, op_restore()))
+
+    # And the totals agree (no op fell through a gap on either backend).
+    t.expect(tally.total).to_eq(rec.size)
+  end
+
+  t.it("the second backend actually saw the load-bearing ops, not an empty tree") do
+    var app = mixed_app.()
+    var tally = TallySurface.new
+    paint_all(&app, &var tally)
+
+    # The clear always happens.
+    t.expect(tally.n_clear).to_eq(1)
+    # The styled row drew a background round-rect AND a border stroke-rect.
+    t.expect(tally.n_round_rect >= 1).to_eq(true)
+    t.expect(tally.n_stroke_rect >= 1).to_eq(true)
+    # The list wrapped its children in save/clip/translate ... restore.
+    t.expect(tally.n_save).to_eq(1)
+    t.expect(tally.n_clip).to_eq(1)
+    t.expect(tally.n_translate).to_eq(1)
+    t.expect(tally.n_restore).to_eq(1)
+    # Text leaves were painted (heading + boxed label + checkbox label + 2 rows).
+    t.expect(tally.n_text >= 4).to_eq(true)
+  end
+
+  t.it("paint_dirty also drives a second backend (targeted repaint is generic too)") do
+    var app = mixed_app.()
+    # Toggle the checkbox so flush returns its node as dirty.
+    let cb = find_checkbox.(&app)
+    app.pointer_down(app.x_of(cb) + 2, app.y_of(cb) + 2)
+    let dirty = app.flush
+
+    var rec = RecordingSurface.new
+    paint_dirty(&app, &var rec, &dirty)
+
+    var tally = TallySurface.new
+    paint_dirty(&app, &var tally, &dirty)
+
+    t.expect(dirty.size as Int > 0).to_eq(true)
+    t.expect(tally.total).to_eq(rec.size)
+    t.expect(tally.n_rect).to_eq(count_op.(&rec, op_rect()))
+    t.expect(tally.n_text).to_eq(count_op.(&rec, op_text()))
+    t.expect(tally.n_stroke_rect).to_eq(count_op.(&rec, op_stroke_rect()))
+  end
+end

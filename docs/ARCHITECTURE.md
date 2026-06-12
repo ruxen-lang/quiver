@@ -22,6 +22,15 @@ language change**. The Ruxen language (L0) stays general-purpose.
 primitive, that primitive is bound in `canvas` (L1) and surfaced as a `Canvas`
 method — never reached around `canvas` directly.
 
+Paint crosses this boundary through the `PaintSurface` mixin (primitives only:
+Ints + `&String`). quiver's generic paint pass is bounded by it
+(`paint_all[S: PaintSurface]`) and monomorphizes against whatever implementor a
+binary supplies — so an app defines its OWN `SkiaPaint` implementor that issues
+`Canvas` calls DIRECTLY as the pass visits each node (one walk, no intermediate
+recording). quiver also ships `RecordingSurface`, a canvas-free implementor used
+by the headless examples and the whole test suite. See
+[`decisions/direct-paint-backend.md`](decisions/direct-paint-backend.md).
+
 ## Consistency model
 
 **Draw-everything** (Flutter-style): `quiver` draws *all* widgets onto L1's

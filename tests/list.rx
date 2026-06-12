@@ -1,0 +1,89 @@
+# Pins the vertically-scrolling List (docs/DSL.md): a container with a FIXED
+# viewport height that clips its children and scrolls them by an offset.
+# All headless — asserted against RecordingSurface, no canvas needed.
+Tester.describe("List — fixed viewport, clip + scroll") do |t: &var Tester|
+  let four_item_list = { || App.build(
+      { |ui: &var Ui, root: &var Col| root.list(row_height() * 2, do |c: &var Col|
+          c.text("a")
+          c.text("b")
+          c.text("c")
+          c.text("d")
+        end) },
+    ) }
+  t.it("the list box is its fixed viewport height, not the content height") do ||
+    var app = four_item_list.()
+    t.expect(app.x_of(0)).to_eq(0)
+    t.expect(app.y_of(0)).to_eq(0)
+    t.expect(app.h_of(0)).to_eq(row_height() * 2)
+    t.expect(app.content_height_of(0)).to_eq(row_height() * 4)
+  end
+  t.it("children stack on Y in content space (offset-free)") do ||
+    var app = four_item_list.()
+    t.expect(app.y_of(1)).to_eq(0)
+    t.expect(app.y_of(2)).to_eq(row_height())
+    t.expect(app.y_of(3)).to_eq(row_height() * 2)
+    t.expect(app.y_of(4)).to_eq(row_height() * 3)
+  end
+  t.it("scroll_by records the offset; children stay in content space") do ||
+    var app = four_item_list.()
+    app.scroll_by(0, row_height())
+    t.expect(app.scroll_of(0)).to_eq(row_height())
+    t.expect(app.y_of(1)).to_eq(0)
+    t.expect(app.y_of(2)).to_eq(row_height())
+    t.expect(app.y_of(1) - app.scroll_of(0)).to_eq(0 - row_height())
+  end
+  t.it("scroll offset clamps to [0, content - viewport]") do ||
+    var app = four_item_list.()
+    app.scroll_by(0, 1000)
+    t.expect(app.scroll_of(0)).to_eq(row_height() * 2)
+    app.scroll_by(0, -1000)
+    t.expect(app.scroll_of(0)).to_eq(0)
+    app.scroll_to(0, 999)
+    t.expect(app.scroll_of(0)).to_eq(row_height() * 2)
+  end
+  t.it("paint clips to the viewport, translates by -offset, then restores") do ||
+    var app = four_item_list.()
+    app.scroll_to(0, row_height())
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    t.expect(surface.command_at(1)).to_eq("save")
+    t.expect(surface.command_at(2)).to_eq("clip(0,0,#{app.w_of(0)},#{row_height() * 2})")
+    t.expect(surface.command_at(3)).to_eq("translate(0,#{0 - row_height()})")
+    t.expect(surface.command_at(4)).to_eq("text('a',4,#{baseline_drop()})")
+    t.expect(surface.command_at(surface.size - 2)).to_eq("restore")
+    t.expect(surface.op_at(surface.size - 1)).to_eq(op_round_rect())
+  end
+  t.it("structured clip/translate/restore ops are recorded for replay") do ||
+    var app = four_item_list.()
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    t.expect(surface.op_at(1)).to_eq(op_save())
+    t.expect(surface.op_at(2)).to_eq(op_clip())
+    t.expect(surface.w_at(2)).to_eq(app.w_of(0))
+    t.expect(surface.h_at(2)).to_eq(row_height() * 2)
+    t.expect(surface.op_at(3)).to_eq(op_translate())
+    t.expect(surface.y_at(3)).to_eq(0)
+    t.expect(surface.op_at(surface.size - 2)).to_eq(op_restore())
+    t.expect(surface.op_at(surface.size - 1)).to_eq(op_round_rect())
+  end
+  t.it("list with NO block builds an empty viewport (block_defined? false path)") do ||
+    var app = App.build(do |ui: &var Ui, root: &var Col|
+          root.text("header")
+          root.list(row_height() * 2)
+        end)
+    t.expect(app.root.kind_at(1)).to_eq(kind_list())
+    t.expect(app.root.list_at(1)).to_eq(true)
+    t.expect(app.root.first_child_of(1)).to_eq(-1)
+    t.expect(app.h_of(1)).to_eq(row_height() * 2)
+    t.expect(app.content_height_of(1)).to_eq(0)
+  end
+  t.it("list WITH a block still builds its rows (block_defined? true path)") do ||
+    var app = App.build({ |ui: &var Ui, root: &var Col| root.list(row_height() * 4) do |c: &var Col|
+          c.text("r1")
+          c.text("r2")
+        end })
+    t.expect(app.root.first_child_of(0) >= 0).to_eq(true)
+    t.expect(app.content_height_of(0)).to_eq(row_height() * 2)
+  end
+end

@@ -1,0 +1,95 @@
+# Pins the text-input EDITING surface that input.rx / window_events.rx leave
+# uncovered: forward delete (`key_delete`), Home/End (`key_home`/`key_end`),
+# and mid-string caret editing. backspace + left/right are pinned elsewhere;
+# this file pins the rest of the documented control-key table (docs/DSL.md).
+# Headless — programmatic `text_input` / `key` + `caret_of` / `text_of`.
+Tester.describe("text input — forward delete, home/end, mid-string editing") do |t: &var Tester|
+  # A single 120px input below a label (label = node 0, input = node 1).
+  let form = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let name = ui.state_str("")
+      root.text("name:")             # node 0
+      root.input(name, 120)          # node 1
+    })
+  }
+
+  let input_y = { || row_height() + 2 }
+
+  # Build a focused input pre-loaded with "abc", caret at end (3).
+  let abc = { ||
+    var app = form.()
+    app.pointer_down(4, input_y.())
+    app.text_input(97)               # a
+    app.text_input(98)               # b
+    app.text_input(99)               # c
+    app.flush
+    app
+  }
+
+  t.it("key_end then key_home park the caret at the ends") do
+    var app = abc.()
+    t.expect(app.caret_of(1)).to_eq(3)   # typing left it at end
+    app.key(key_home())
+    t.expect(app.caret_of(1)).to_eq(0)
+    app.key(key_end())
+    t.expect(app.caret_of(1)).to_eq(3)
+  end
+
+  t.it("forward delete removes the char AT the caret; caret stays put") do
+    var app = abc.()
+    app.key(key_home())              # caret -> 0, before 'a'
+    app.key(key_delete())            # delete 'a' -> "bc", caret still 0
+    app.flush
+    t.expect(app.text_of(1)).to_eq("bc")
+    t.expect(app.caret_of(1)).to_eq(0)
+  end
+
+  t.it("forward delete in the middle removes the char after the caret") do
+    var app = abc.()
+    app.key(key_home())
+    app.key(key_right())             # caret -> 1, between 'a' and 'b'
+    app.key(key_delete())            # delete 'b' -> "ac", caret still 1
+    app.flush
+    t.expect(app.text_of(1)).to_eq("ac")
+    t.expect(app.caret_of(1)).to_eq(1)
+  end
+
+  t.it("forward delete at the end is a no-op") do
+    var app = abc.()
+    app.key(key_end())               # caret at end (3), nothing after it
+    app.key(key_delete())
+    app.flush
+    t.expect(app.text_of(1)).to_eq("abc")
+    t.expect(app.caret_of(1)).to_eq(3)
+  end
+
+  t.it("home then insert lands the new char at the start") do
+    var app = abc.()
+    app.key(key_home())              # caret -> 0
+    app.text_input(122)              # 'z' at the front -> "zabc"
+    app.flush
+    t.expect(app.text_of(1)).to_eq("zabc")
+    t.expect(app.caret_of(1)).to_eq(1)
+  end
+
+  t.it("end after a home re-parks at the true length, then insert appends") do
+    var app = abc.()
+    app.key(key_home())
+    app.key(key_end())               # back to 3
+    app.text_input(100)              # 'd' -> "abcd"
+    app.flush
+    t.expect(app.text_of(1)).to_eq("abcd")
+    t.expect(app.caret_of(1)).to_eq(4)
+  end
+
+  t.it("control keys with nothing focused are no-ops") do
+    var app = form.()                # built, never focused
+    t.expect(app.focused_node).to_eq(-1)
+    app.key(key_delete())
+    app.key(key_home())
+    app.key(key_end())
+    app.flush
+    t.expect(app.text_of(1)).to_eq("")
+    t.expect(app.caret_of(1)).to_eq(0)
+  end
+end

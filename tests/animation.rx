@@ -1,0 +1,214 @@
+# Pins F4 — the animation engine (docs/decisions/animation.md): fixed-point
+# per-mille curves, explicit offset + colour tweens stepped deterministically off
+# the injected clock seam, slot reuse on retirement, dirty-set exactness (a
+# non-animating sibling never repaints), fling + tween coexistence, completion
+# callbacks firing exactly once, supersede, and colour implicit transitions. All
+# headless: a fake clock (`set_clock`) drives `tick`, no canvas.
+Tester.describe("F4 — tweens, curves, stepping, transitions") do |t: &var Tester|
+  let pair = { || App.build(do |ui: &var Ui, root: &var Col|
+        let a = ui.state(0)
+        root.button("A", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+        root.button("B", { |ui2: &var Ui| a.update(ui2, { |v| v + 1 }) })
+      end) }
+  t.it("linear curve is the identity on progress") do ||
+    t.expect(ease(curve_linear(), 0)).to_eq(0)
+    t.expect(ease(curve_linear(), 500)).to_eq(500)
+    t.expect(ease(curve_linear(), 1000)).to_eq(1000)
+  end
+  t.it("ease_in is quadratic (slow start)") do ||
+    t.expect(ease(curve_ease_in(), 500)).to_eq(250)
+    t.expect(ease(curve_ease_in(), 1000)).to_eq(1000)
+  end
+  t.it("ease_out is quadratic (fast start)") do ||
+    t.expect(ease(curve_ease_out(), 500)).to_eq(750)
+    t.expect(ease(curve_ease_out(), 0)).to_eq(0)
+  end
+  t.it("ease_in_out is symmetric quadratic") do ||
+    t.expect(ease(curve_ease_in_out(), 500)).to_eq(500)
+    t.expect(ease(curve_ease_in_out(), 250)).to_eq(125)
+  end
+  t.it("anim_lerp interpolates with eased progress") do ||
+    t.expect(anim_lerp(0, 100, 0)).to_eq(0)
+    t.expect(anim_lerp(0, 100, 500)).to_eq(50)
+    t.expect(anim_lerp(0, 100, 1000)).to_eq(100)
+    t.expect(anim_lerp(20, 220, 250)).to_eq(70)
+  end
+  t.it("a linear offset tween reaches known midpoints per tick") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.tween_offset(0, 0, 0, 0, 100, 10, curve_linear())
+    t.expect(app.anim_off_y(0)).to_eq(0)
+    ms.set(&var clk, 5)
+    app.tick
+    t.expect(app.anim_off_y(0)).to_eq(50)
+    ms.set(&var clk, 8)
+    app.tick
+    t.expect(app.anim_off_y(0)).to_eq(80)
+  end
+  t.it("a finished tween clamps to the end value exactly and retires its slot") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.tween_offset(0, 0, 0, 0, 97, 10, curve_linear())
+    t.expect(app.anim_live_count).to_eq(2)
+    ms.set(&var clk, 10)
+    app.tick
+    t.expect(app.anim_off_y(0)).to_eq(97)
+    t.expect(app.anim_live_count).to_eq(0)
+    let rows_before = app.anim_row_count
+    app.tween_offset(0, 0, 0, 0, 10, 5, curve_linear())
+    t.expect(app.anim_row_count).to_eq(rows_before)
+  end
+  t.it("tick returns false once no animation is live") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.tween_offset(0, 0, 0, 0, 10, 5, curve_linear())
+    ms.set(&var clk, 5)
+    t.expect(app.tick).to_eq(true)
+    ms.set(&var clk, 6)
+    t.expect(app.tick).to_eq(false)
+  end
+  t.it("only the animating node is marked dirty; the sibling never repaints") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.flush
+    app.tween_offset(0, 0, 0, 0, 100, 10, curve_linear())
+    ms.set(&var clk, 5)
+    app.tick
+    let dirty = app.flush
+    t.expect(dirty.size as Int).to_eq(1)
+    ArrayMatcher.new(&dirty).to_include(0)
+  end
+  t.it("a colour tween lerps each channel and lands exact at retirement") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.tween_color(0, 0, 0, 0, 200, 100, 50, 10, curve_linear())
+    t.expect(app.anim_has_color?(0)).to_eq(true)
+    ms.set(&var clk, 5)
+    app.tick
+    t.expect(app.anim_color_r_of(0, 0)).to_eq(100)
+    t.expect(app.anim_color_g_of(0, 0)).to_eq(50)
+    t.expect(app.anim_color_b_of(0, 0)).to_eq(25)
+    ms.set(&var clk, 10)
+    app.tick
+    t.expect(app.anim_color_r_of(0, 0)).to_eq(200)
+    t.expect(app.anim_color_g_of(0, 0)).to_eq(100)
+    t.expect(app.anim_color_b_of(0, 0)).to_eq(50)
+  end
+  let scroller = { || App.build(do |ui: &var Ui, root: &var Col|
+        root.list(row_height() * 2) do |c: &var Col|
+          var i = 0
+          while i < 10
+            c.text("row")
+            i = i + 1
+          end
+        end
+        root.button("anim", { |ui2: &var Ui| nil })
+      end) }
+  t.it("a fling and a tween both step from the same single tick") do ||
+    var app = scroller.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.pointer_down(2, row_height() + 2)
+    ms.set(&var clk, 10)
+    app.pointer_move(2, row_height() + 2 - 30)
+    app.pointer_up(2, row_height() + 2 - 30)
+    let scroll_before = app.scroll_of(0)
+    let btn = app.root.size - 1
+    app.tween_offset(btn, 0, 0, 0, 100, 10, curve_linear())
+    ms.set(&var clk, 11)
+    app.tick
+    t.expect(app.scroll_of(0) > scroll_before).to_eq(true)
+    t.expect(app.anim_off_y(btn) > 0).to_eq(true)
+  end
+  t.it("a completion callback fires exactly once at retirement") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    var fui = Ui.new
+    let fired = fui.state(0)
+    app.tween_offset_done(
+      0,
+      0,
+      0,
+      0,
+      50,
+      10,
+      curve_linear(),
+      { |ui2: &var Ui| fired.update(ui2, { |v| v + 1 }) },
+    )
+    ms.set(&var clk, 5)
+    app.tick
+    t.expect(fired.peek).to_eq(0)
+    ms.set(&var clk, 10)
+    app.tick
+    t.expect(fired.peek).to_eq(1)
+    ms.set(&var clk, 11)
+    app.tick
+    t.expect(fired.peek).to_eq(1)
+  end
+  t.it("a new tween on the same node+channel supersedes the live one") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.tween_offset(0, 0, 0, 0, 100, 10, curve_linear())
+    ms.set(&var clk, 5)
+    app.tick
+    t.expect(app.anim_off_y(0)).to_eq(50)
+    app.tween_offset(0, 0, 50, 0, 0, 10, curve_linear())
+    t.expect(app.anim_live_count).to_eq(2)
+    ms.set(&var clk, 10)
+    app.tick
+    t.expect(app.anim_off_y(0)).to_eq(25)
+  end
+  t.it("set_color on a transition-marked node animates instead of snapping") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.set_color(0, 0, 0, 0)
+    app.transition_color(0, 10, curve_linear())
+    app.set_color(0, 100, 0, 0)
+    t.expect(app.anim_color_r_of(0, 0)).to_eq(0)
+    ms.set(&var clk, 5)
+    app.tick
+    t.expect(app.anim_color_r_of(0, 0)).to_eq(50)
+    ms.set(&var clk, 10)
+    app.tick
+    t.expect(app.anim_color_r_of(0, 0)).to_eq(100)
+  end
+  t.it("set_color WITHOUT a transition mark snaps instantly") do ||
+    var app = pair.()
+    app.set_color(0, 0, 0, 0)
+    app.set_color(0, 130, 0, 0)
+    t.expect(app.anim_color_r_of(0, 0)).to_eq(130)
+    t.expect(app.animating?).to_eq(false)
+  end
+  t.it("the Save-button pulse flashes the highlight then fades to grey") do ||
+    var app = pair.()
+    var clk = Ui.new
+    let ms = clk.state(0)
+    app.set_clock({ || ms.peek })
+    app.tween_color(0, 120, 200, 140, 200, 200, 200, 20, curve_ease_out())
+    t.expect(app.anim_color_g_of(0, 200)).to_eq(200)
+    t.expect(app.anim_color_r_of(0, 200)).to_eq(120)
+    ms.set(&var clk, 20)
+    app.tick
+    t.expect(app.anim_color_r_of(0, 200)).to_eq(200)
+    t.expect(app.anim_color_g_of(0, 200)).to_eq(200)
+    t.expect(app.anim_color_b_of(0, 200)).to_eq(200)
+    t.expect(app.animating?).to_eq(false)
+  end
+end

@@ -1,0 +1,148 @@
+# Pins STRUCTURAL reactivity (docs/decisions/structural-reactivity.md): a
+# `list_of` node bound to a shared `ListModel`. Mutating the model (add / remove
+# / toggle — single-lock RMW that bumps a version) marks the list dirty; flush
+# REBUILDS the list's child subtree from the current items. The rest of the tree
+# is untouched. Headless — model mutations + RecordingSurface.
+#
+# NOTE on the API shape: a `ListModel` is a non-Copy handle, and a method call
+# consumes it in this ruxen build, so the model is passed to `list_of` exactly
+# ONCE (let-bound first), and every later mutation re-fetches a fresh model copy
+# via `app.list_model_of(list_id)` — each copy shares the same cell.
+Tester.describe("dynamic list — add / remove / toggle rebuild the subtree") do |t: &var Tester|
+  # A todo-ish app: a static header (node 0), then a reactive list (node 1).
+  let todo_app = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let model = ui.list_model
+      root.text("Todos")           # node 0 — static, never rebuilt
+      root.list_of(model, row_height() * 4, { |c: &var Col, m: ListModel, i: Int|
+        c.text("#{m.row_text(i)}")
+      })
+    })
+  }
+
+  # Build + seed one item ("alpha") through the public mutation path, so the
+  # list starts with a row. (Re-fetch the model per call.)
+  let seeded_app = { ||
+    var app = todo_app.()
+    app.list_model_of(1).add(&var app.ui, "alpha")
+    app.flush
+    app
+  }
+
+  t.it("starts empty; the seeded item appears after add + flush") do
+    var app = todo_app.()
+    t.expect(app.root.list_of_at(1)).to_eq(true)
+    t.expect(app.list_model_of(1).count).to_eq(0)
+    t.expect(app.root.first_child_of(1)).to_eq(-1)
+    app.list_model_of(1).add(&var app.ui, "alpha")
+    let refreshed = app.flush
+    # the list node (1) is the dirty scope that rebuilt
+    ArrayMatcher.new(&refreshed).to_include(1)
+    t.expect(app.list_model_of(1).count).to_eq(1)
+    let row = app.root.first_child_of(1)
+    t.expect(row >= 0).to_eq(true)
+    t.expect(app.text_of(row)).to_eq("[ ] alpha")
+  end
+
+  t.it("add grows the list by a row; flush rebuilds the subtree in order") do
+    var app = seeded_app.()
+    app.list_model_of(1).add(&var app.ui, "beta")
+    app.flush
+    t.expect(app.list_model_of(1).count).to_eq(2)
+    var rows: Array[String] = Array.new
+    var c = app.root.first_child_of(1)
+    while c >= 0
+      rows.push(app.text_of(c))
+      c = app.root.next_sibling_of(c)
+    end
+    t.expect(rows.size as Int).to_eq(2)
+    t.expect(app.text_of(app.root.first_child_of(1))).to_eq("[ ] alpha")
+  end
+
+  t.it("the rest of the tree is untouched by a list rebuild") do
+    var app = seeded_app.()
+    let header_before = app.text_of(0)
+    app.list_model_of(1).add(&var app.ui, "beta")
+    app.flush
+    t.expect(app.text_of(0)).to_eq(header_before)
+    t.expect(app.text_of(0)).to_eq("Todos")
+  end
+
+  t.it("toggle flips an item's done marker; the row text reflects it") do
+    var app = seeded_app.()
+    app.list_model_of(1).add(&var app.ui, "beta")
+    app.flush
+    app.list_model_of(1).toggle(&var app.ui, 0)   # mark "alpha" done
+    app.flush
+    let row0 = app.root.first_child_of(1)
+    t.expect(app.text_of(row0)).to_eq("[x] alpha")
+    t.expect(app.list_model_of(1).done_at(0)).to_eq(true)
+  end
+
+  t.it("remove drops a row; the list shrinks") do
+    var app = seeded_app.()
+    app.list_model_of(1).add(&var app.ui, "beta")
+    app.flush
+    app.list_model_of(1).add(&var app.ui, "gamma")
+    app.flush
+    t.expect(app.list_model_of(1).count).to_eq(3)
+    app.list_model_of(1).remove(&var app.ui, 1)   # drop "beta"
+    app.flush
+    t.expect(app.list_model_of(1).count).to_eq(2)
+    var rows: Array[String] = Array.new
+    var c = app.root.first_child_of(1)
+    while c >= 0
+      rows.push(app.text_of(c))
+      c = app.root.next_sibling_of(c)
+    end
+    t.expect(rows.size as Int).to_eq(2)
+    t.expect(app.text_of(app.root.first_child_of(1))).to_eq("[ ] alpha")
+  end
+
+  t.it("paint records the current rows; a rebuilt list paints its new children") do
+    var app = seeded_app.()
+    app.list_model_of(1).add(&var app.ui, "beta")
+    app.flush
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    var saw_alpha = false
+    var saw_beta = false
+    var k = 0
+    let n = surface.size
+    while k < n
+      let cmd = surface.command_at(k)
+      # the list is node 1 (below the header), so its rows paint in the list's
+      # content space starting at y = row_height: alpha at baseline 24+16=40,
+      # beta at 48+16=64 — inside the list's save/clip/translate.
+      if cmd == "text('[ ] alpha',4,40)"
+        saw_alpha = true
+      end
+      if cmd == "text('[ ] beta',4,64)"
+        saw_beta = true
+      end
+      k = k + 1
+    end
+    t.expect(saw_alpha).to_eq(true)
+    t.expect(saw_beta).to_eq(true)
+  end
+
+  t.it("an empty list (all removed) rebuilds to zero rows without crashing") do
+    var app = seeded_app.()
+    app.list_model_of(1).remove(&var app.ui, 0)   # remove the only item
+    app.flush
+    t.expect(app.list_model_of(1).count).to_eq(0)
+    t.expect(app.root.first_child_of(1)).to_eq(-1)
+  end
+
+  # `alias size count` / `alias length count` on ListModel — Ruby synonyms, one
+  # body each, so `model.size` / `model.length` read the same item count.
+  t.it("ListModel.size and ListModel.length alias count") do
+    var app = todo_app.()
+    app.list_model_of(1).add(&var app.ui, "alpha")
+    app.list_model_of(1).add(&var app.ui, "beta")
+    app.flush
+    t.expect(app.list_model_of(1).size).to_eq(2)
+    t.expect(app.list_model_of(1).length).to_eq(2)
+    t.expect(app.list_model_of(1).size).to_eq(app.list_model_of(1).count)
+  end
+end

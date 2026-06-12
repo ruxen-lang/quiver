@@ -1,4 +1,4 @@
-## The column builder DSL.
+## The container builder DSL.
 ##
 ## `App.build` hands the user's block a `&var Col`; each call appends one
 ## node. The tree is a *flat arena* — parallel, push-only arrays indexed by
@@ -6,35 +6,292 @@
 ## `Option[any Fn]` fields both miscompile in ruxen v1; parallel arrays with
 ## `-1` sentinels are the safe encoding).
 ##
+## Nesting (containers owning children) uses the same flat-arena discipline:
+## the parent/child/sibling LINKS live in `Hash[Int, Int]` (ruxen v1 has no
+## array index-assignment, so the threaded links — which are patched after a
+## node is created — must live in a structure that supports update). Every
+## link is a node id or `-1`; there is no recursive type anywhere. Node ids
+## are still build-order indices — the "ids ARE node ids" invariant holds.
+##
 ## The one DSL rule (docs/DSL.md):
 ##   - `text("...")`            -> STATIC:   built once, never re-evaluated.
 ##   - `dyn_text({ |ui| ... })` -> REACTIVE: the closure is a tracking scope,
 ##                                 re-run only when a state it read changes.
 ##   - `button("...", { |ui| ... })` -> static label, stored click handler.
+##   - `row({ |c| ... })` / `col({ |c| ... })` -> a CONTAINER node; the nodes
+##                                 built inside the block become its children.
 ##
-## (`text` and `dyn_text` are distinct methods, not overloads of one name:
-## ruxen v1 miscompiles &str-vs-closure overloads.)
-
+## (`text` and `dyn_text` are distinct methods by design — the name says
+## static vs reactive at the call site.)
 ## Node kinds. (Plain Int constants; a `Kind` enum would also work but Int
 ## keeps the parallel arrays trivially comparable in tests.)
 def kind_text -> Int { 1 }
+
 def kind_dyn_text -> Int { 2 }
+
 def kind_button -> Int { 3 }
 
-## A vertical stack of nodes under construction.
+## Container kinds — own children, draw nothing themselves. The own-flex
+## layout pass arranges their children along an axis (`Row` = X, `Col` = Y;
+## see docs/LAYOUT.md).
+def kind_row -> Int { 4 }
+
+def kind_col -> Int { 5 }
+
+## A `List` is a `Col`-like vertical container with a FIXED viewport height: it
+## clips its children and scrolls them by an offset when the content overflows
+## (see docs/DSL.md). Its box is the viewport, not the content extent.
+def kind_list -> Int { 6 }
+
+## A single-line text `Input`: a focusable leaf whose value is a reactive
+## `State[String]`. It re-renders like a `dyn_text` (its compute reads the
+## value) and is edited via `App.key_down` at a caret (see docs/DSL.md).
+def kind_input -> Int { 7 }
+
+## A `Checkbox`: a clickable leaf bound to a reactive `State[Bool]`. Its compute
+## reads the bool (so it re-renders on toggle) and its handler toggles it; paint
+## draws a box + a filled mark when checked + the label (see docs/DSL.md).
+def kind_checkbox -> Int { 8 }
+
+## A horizontal `Slider`: a draggable leaf bound to a reactive `State[Int]` over
+## `[min, max]`. Its compute reads the value (so the thumb re-renders); `App`
+## drives click-to-set and drag (via pointer capture). See docs/DSL.md.
+def kind_slider -> Int { 9 }
+
+## A `Select` (dropdown): a clickable trigger bound to a reactive `State[Int]`
+## (selected index) over a list of option strings. Its compute reads the index
+## (so the trigger reflects the selection); clicking it opens an `App` overlay
+## popup of the options. See docs/DSL.md.
+def kind_select -> Int { 10 }
+
+## A `ListOf` (reactive/dynamic list): like `List` (fixed viewport, clip +
+## scroll) but its children are REBUILT from a shared `ListModel` whenever the
+## model's version changes. The one structural-reactivity construct — see
+## docs/decisions/structural-reactivity.md.
+def kind_list_of -> Int { 11 }
+
+## A `Stack`: a container whose children ALL occupy its box (z-order = build
+## order; first child at the bottom, last on top), each optionally offset by its
+## own `Style.offset(left, top)`. The primitive for badges/overlap. Children
+## paint in build order (bottom→top) and hit-test in REVERSE (topmost wins).
+## See docs/LAYOUT.md F1 addendum.
+def kind_stack -> Int { 12 }
+
+## Main-axis distribution (`justify`) of a container's children over leftover
+## main-axis space (docs/LAYOUT.md F1). Plain Ints, like the node kinds.
+def just_start -> Int { 0 }
+
+def just_center -> Int { 1 }
+
+def just_end -> Int { 2 }
+
+def just_space_between -> Int { 3 }
+
+def just_space_around -> Int { 4 }
+
+## Cross-axis alignment (`align`) of each child within the container's cross
+## extent (docs/LAYOUT.md F1).
+def align_start -> Int { 0 }
+
+def align_center -> Int { 1 }
+
+def align_end -> Int { 2 }
+
+def align_stretch -> Int { 3 }
+
+## Container style: padding, background fill, border, corner radius.
+##
+## A small value object the user constructs with chainable setters and hands to
+## `row_styled` / `col_styled`; `Col` unpacks it into parallel Int hashes (the
+## same flat-arena discipline as the tree links). `-1` sentinels mean "unset":
+## `bg_r < 0` ⇒ no background, `border_w <= 0` ⇒ no border.
+##
+##   Style.new.pad(8).background(200, 200, 200).border(2, 0, 0, 255).radius(4)
+class Style
+  padding: Int
+  pad_l: Int
+  pad_t: Int
+  pad_r: Int
+  pad_b: Int
+  gap: Int
+  justify: Int
+  align: Int
+  grow: Int
+  offset_l: Int
+  offset_t: Int
+  bg_r: Int
+  bg_g: Int
+  bg_b: Int
+  border_w: Int
+  border_r: Int
+  border_g: Int
+  border_b: Int
+  corner: Int
+
+  def init
+    self.padding = 0
+    self.pad_l = 0
+    self.pad_t = 0
+    self.pad_r = 0
+    self.pad_b = 0
+    self.gap = 0
+    self.justify = just_start()
+    self.align = align_start()
+    self.grow = 0
+    self.offset_l = 0
+    self.offset_t = 0
+    self.bg_r = -1
+    self.bg_g = 0
+    self.bg_b = 0
+    self.border_w = 0
+    self.border_r = 0
+    self.border_g = 0
+    self.border_b = 0
+    self.corner = 0
+  end
+
+  ## Set uniform padding (px) — sets the shorthand AND all four per-side fields.
+  ## Returns self for chaining.
+  def var pad(n: Int) -> Style
+    self.padding = n
+    self.pad_l = n
+    self.pad_t = n
+    self.pad_r = n
+    self.pad_b = n
+    self
+  end
+
+  ## Set per-side padding (left, top, right, bottom). Overrides `pad`. Returns
+  ## self for chaining.
+  def var pad_sides(l: Int, t: Int, r: Int, b: Int) -> Style
+    self.pad_l = l
+    self.pad_t = t
+    self.pad_r = r
+    self.pad_b = b
+    self
+  end
+
+  ## Set the main-axis gap (px) between adjacent children. Returns self.
+  def var gap(n: Int) -> Style
+    self.gap = n
+    self
+  end
+
+  ## Set main-axis distribution (just_start / center / end / space_between /
+  ## space_around). Returns self.
+  def var justify(j: Int) -> Style
+    self.justify = j
+    self
+  end
+
+  ## Set cross-axis alignment (align_start / center / end / stretch). Returns self.
+  def var align(a: Int) -> Style
+    self.align = a
+    self
+  end
+
+  ## Set this container's main-axis grow weight in its parent. Returns self.
+  def var grow(n: Int) -> Style
+    self.grow = n
+    self
+  end
+
+  ## Set this child's stack-positioning offset (left, top px). Returns self.
+  def var offset(l: Int, t: Int) -> Style
+    self.offset_l = l
+    self.offset_t = t
+    self
+  end
+
+  ## Set the background fill colour (RGB 0-255). Returns self for chaining.
+  def var background(r: Int, g: Int, b: Int) -> Style
+    self.bg_r = r
+    self.bg_g = g
+    self.bg_b = b
+    self
+  end
+
+  ## Set the border: stroke width (px) + colour (RGB 0-255). Returns self.
+  def var border(width: Int, r: Int, g: Int, b: Int) -> Style
+    self.border_w = width
+    self.border_r = r
+    self.border_g = g
+    self.border_b = b
+    self
+  end
+
+  ## Set the corner radius (px). Returns self for chaining.
+  def var radius(n: Int) -> Style
+    self.corner = n
+    self
+  end
+
+  ## True when a background fill is set.
+  def has_bg -> Bool { self.bg_r >= 0 }
+
+  ## True when a border is set.
+  def has_border -> Bool { self.border_w > 0 }
+end
+
+## A tree of nodes under construction (the top level stacks vertically).
 class Col
-  ## Node kind per node id (kind_text / kind_dyn_text / kind_button).
   kinds: Array[Int]
-  ## Static label (text/button) or "" for reactive text.
   labels: Array[String]
-  ## Reactive text closures (tracking scopes).
   computes: Array[any Fn[Fn(&var Ui) -> String]]
-  ## node id -> index into `computes`, or -1.
   compute_of: Array[Int]
-  ## Click handlers.
   handlers: Array[any Fn[Fn(&var Ui) -> nil]]
-  ## node id -> index into `handlers`, or -1.
   handler_of: Array[Int]
+  long_press_handlers: Array[any Fn[Fn(&var Ui) -> nil]]
+  long_press_of: Hash[Int, Int]
+  parent: Hash[Int, Int]
+  child_first: Hash[Int, Int]
+  child_last: Hash[Int, Int]
+  child_next: Hash[Int, Int]
+  root_first: Int
+  root_last: Int
+  parent_cursor: Int
+  iw: Array[Int]
+  pad_of: Hash[Int, Int]
+  pad_l_of: Hash[Int, Int]
+  pad_t_of: Hash[Int, Int]
+  pad_r_of: Hash[Int, Int]
+  pad_b_of: Hash[Int, Int]
+  gap_of: Hash[Int, Int]
+  justify_of: Hash[Int, Int]
+  align_of: Hash[Int, Int]
+  grow_of: Hash[Int, Int]
+  offset_l_of: Hash[Int, Int]
+  offset_t_of: Hash[Int, Int]
+  bg_r_of: Hash[Int, Int]
+  bg_g_of: Hash[Int, Int]
+  bg_b_of: Hash[Int, Int]
+  border_w_of: Hash[Int, Int]
+  border_r_of: Hash[Int, Int]
+  border_g_of: Hash[Int, Int]
+  border_b_of: Hash[Int, Int]
+  corner_of: Hash[Int, Int]
+  viewport_of: Hash[Int, Int]
+  horizontal_of: Hash[Int, Bool]
+  values: Array[State[String]]
+  value_of: Hash[Int, Int]
+  input_width_of: Hash[Int, Int]
+  multiline_of: Hash[Int, Bool]
+  rows_of: Hash[Int, Int]
+  bools: Array[State[Bool]]
+  bool_of: Hash[Int, Int]
+  ints: Array[State[Int]]
+  int_of: Hash[Int, Int]
+  slider_min_of: Hash[Int, Int]
+  slider_max_of: Hash[Int, Int]
+  slider_width_of: Hash[Int, Int]
+  option_strings: Array[String]
+  option_start_of: Hash[Int, Int]
+  option_count_of: Hash[Int, Int]
+  select_width_of: Hash[Int, Int]
+  models: Array[ListModel]
+  model_of: Hash[Int, Int]
+  item_builders: Array[any Fn[Fn(&var Col, ListModel, Int) -> nil]]
+  item_builder_of: Hash[Int, Int]
 
   def init
     self.kinds = Array.new
@@ -43,54 +300,644 @@ class Col
     self.compute_of = Array.new
     self.handlers = Array.new
     self.handler_of = Array.new
+    self.long_press_handlers = Array.new
+    self.long_press_of = Hash.new
+    self.parent = Hash.new
+    self.child_first = Hash.new
+    self.child_last = Hash.new
+    self.child_next = Hash.new
+    self.root_first = -1
+    self.root_last = -1
+    self.parent_cursor = -1
+    self.iw = Array.new
+    self.pad_of = Hash.new
+    self.pad_l_of = Hash.new
+    self.pad_t_of = Hash.new
+    self.pad_r_of = Hash.new
+    self.pad_b_of = Hash.new
+    self.gap_of = Hash.new
+    self.justify_of = Hash.new
+    self.align_of = Hash.new
+    self.grow_of = Hash.new
+    self.offset_l_of = Hash.new
+    self.offset_t_of = Hash.new
+    self.bg_r_of = Hash.new
+    self.bg_g_of = Hash.new
+    self.bg_b_of = Hash.new
+    self.border_w_of = Hash.new
+    self.border_r_of = Hash.new
+    self.border_g_of = Hash.new
+    self.border_b_of = Hash.new
+    self.corner_of = Hash.new
+    self.viewport_of = Hash.new
+    self.horizontal_of = Hash.new
+    self.values = Array.new
+    self.value_of = Hash.new
+    self.input_width_of = Hash.new
+    self.multiline_of = Hash.new
+    self.rows_of = Hash.new
+    self.bools = Array.new
+    self.bool_of = Hash.new
+    self.ints = Array.new
+    self.int_of = Hash.new
+    self.slider_min_of = Hash.new
+    self.slider_max_of = Hash.new
+    self.slider_width_of = Hash.new
+    self.option_strings = Array.new
+    self.option_start_of = Hash.new
+    self.option_count_of = Hash.new
+    self.select_width_of = Hash.new
+    self.models = Array.new
+    self.model_of = Hash.new
+    self.item_builders = Array.new
+    self.item_builder_of = Hash.new
+  end
+
+  ## Reset the intrinsic-width buffer (called at the top of each layout pass).
+  def var reset_iw -> nil { self.iw = Array.new }
+
+  ## Append one node's intrinsic width (id order matches build order).
+  def var push_iw(w: Int) -> nil { self.iw.push(w) }
+
+  ## Intrinsic width recorded for node `i` (0 for containers / out of range).
+  def iw_of(i: Int) -> Int
+    match self.iw.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
   end
 
   ## Number of nodes built so far.
-  def size -> Int
-    self.kinds.size as Int
-  end
+  def size -> Int { self.kinds.size as Int }
 
-  ## A static text node: built once, never re-evaluated.
-  def var text(label: &str) -> nil
+  ## A static text node: built once, never re-evaluated. `label` is taken by
+  ## value (owned `String`): a bare/interpolated literal coerces to `String`
+  ## post-Q38, so call sites pass `c.text("x")` directly (no `String.from`).
+  def var text(label: String) -> nil
+    let id = self.size
     self.kinds.push(kind_text())
-    self.labels.push(String.from(label))
+    self.labels.push(label)
     self.compute_of.push(-1)
     self.handler_of.push(-1)
+    self.link(id)
   end
 
   ## A reactive text node. The closure is a tracking scope: the states it
   ## reads via `.get(ui)` subscribe this node, and only this node re-runs
   ## when one of them changes.
   def var dyn_text(compute: any Fn[Fn(&var Ui) -> String]) -> nil
+    let id = self.size
     self.kinds.push(kind_dyn_text())
-    self.labels.push(String.from(""))
+    self.labels.push("")
     self.compute_of.push(self.computes.size as Int)
     self.computes.push(compute)
     self.handler_of.push(-1)
+    self.link(id)
   end
 
-  ## A button with a static label and a stored click handler.
-  def var button(label: &str, on_click: any Fn[Fn(&var Ui) -> nil]) -> nil
+  ## A button with a static label and a stored click handler. `label` is owned
+  ## `String` (a literal coerces post-Q38).
+  def var button(label: String, on_click: any Fn[Fn(&var Ui) -> nil]) -> nil
+    let id = self.size
     self.kinds.push(kind_button())
-    self.labels.push(String.from(label))
+    self.labels.push(label)
     self.compute_of.push(-1)
     self.handler_of.push(self.handlers.size as Int)
     self.handlers.push(on_click)
+    self.link(id)
+  end
+
+  ## A single-line text input bound to a reactive `State[String]` value, with a
+  ## fixed box width. The node is a tracking scope (its compute reads `value`),
+  ## so it re-renders when the value changes; `App` drives focus + caret + key
+  ## editing and mutates `value`. Build it at the top level so the captured
+  ## value handle is sound:
+  ##
+  ##   let name = ui.state_str("")
+  ##   root.input(name, 160)
+  def var input(value: State[String], width: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_input())
+    self.labels.push("")
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| value.get(ui2) })
+    self.handler_of.push(-1)
+    self.value_of.insert(id, self.values.size as Int)
+    self.values.push(value)
+    self.input_width_of.insert(id, width)
+    self.link(id)
+  end
+
+  ## A MULTI-LINE text input (`textarea`) bound to a reactive `State[String]`,
+  ## with a fixed width and a fixed number of visible `rows` (the box is
+  ## `rows * row_height` tall). The value is one String with '\n' line separators
+  ## (no recursive line types — the caret is a flat char index; `App` navigates
+  ## lines by scanning newlines). It reuses ALL the single-line input machinery
+  ## (focus / caret / selection / clipboard / undo / IME); the `multiline` flag
+  ## drives multi-line layout + paint + up/down caret navigation (F3 — see
+  ## docs/decisions/text-editing.md).
+  ##
+  ##   let body = ui.state_str("line one\nline two")
+  ##   root.textarea(body, 240, 4)
+  def var textarea(value: State[String], width: Int, rows: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_input())
+    self.labels.push("")
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| value.get(ui2) })
+    self.handler_of.push(-1)
+    self.value_of.insert(id, self.values.size as Int)
+    self.values.push(value)
+    self.input_width_of.insert(id, width)
+    self.multiline_of.insert(id, true)
+    self.rows_of.insert(id, rows)
+    self.link(id)
+  end
+
+  ## A checkbox bound to a reactive `State[Bool]` with a static label. It is BOTH
+  ## a tracking scope (its compute reads `state`, so it re-renders on toggle) AND
+  ## clickable (its handler toggles `state` with a single-lock `update`). Build
+  ## it at the top level / inside a container so the captured handle is sound:
+  ##
+  ##   let agree = ui.state_bool(false)
+  ##   root.checkbox(agree, "I agree")
+  def var checkbox(state: State[Bool], label: String) -> nil
+    let id = self.size
+    self.kinds.push(kind_checkbox())
+    self.labels.push(label)
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| if state.get(ui2)
+          "y"
+        else
+          "n"
+        end })
+    self.handler_of.push(self.handlers.size as Int)
+    self.handlers.push({ |ui2: &var Ui| state.update(ui2, { |b| !b }) })
+    self.bool_of.insert(id, self.bools.size as Int)
+    self.bools.push(state)
+    self.link(id)
+  end
+
+  ## A horizontal slider bound to a reactive `State[Int]` over `[min, max]`, with
+  ## a fixed track width. The node is a tracking scope (its compute reads the
+  ## value, so the thumb re-renders); `App` drives click-to-set + drag (capture)
+  ## and writes the value. Build it where the captured handle is sound:
+  ##
+  ##   let vol = ui.state(50)
+  ##   root.slider(vol, 0, 100, 200)
+  def var slider(state: State[Int], min: Int, max: Int, width: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_slider())
+    self.labels.push("")
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| "#{state.get(ui2)}" })
+    self.handler_of.push(-1)
+    self.int_of.insert(id, self.ints.size as Int)
+    self.ints.push(state)
+    self.slider_min_of.insert(id, min)
+    self.slider_max_of.insert(id, max)
+    self.slider_width_of.insert(id, width)
+    self.link(id)
+  end
+
+  ## A dropdown/select bound to a reactive `State[Int]` (selected index) over a
+  ## list of option strings, with a fixed trigger width. Its compute reads the
+  ## index so the trigger reflects the selection; `App` opens an overlay popup of
+  ## the options on click and writes the index on choose (single-lock `set`):
+  ##
+  ##   let choice = ui.state(0)
+  ##   root.select(choice, options, 160)
+  def var select(state: State[Int], options: Array[String], width: Int) -> nil
+    let id = self.size
+    self.kinds.push(kind_select())
+    self.labels.push("")
+    self.compute_of.push(self.computes.size as Int)
+    self.computes.push({ |ui2: &var Ui| "#{state.get(ui2)}" })
+    self.handler_of.push(-1)
+    self.int_of.insert(id, self.ints.size as Int)
+    self.ints.push(state)
+    self.option_start_of.insert(id, self.option_strings.size as Int)
+    self.option_count_of.insert(id, options.size as Int)
+    var k = 0
+    let n = options.size as Int
+    while k < n
+      match options.get(k)
+        Some(s) -> self.option_strings.push(s.clone)
+        nil -> self.option_strings.push("")
+      end
+      k = k + 1
+    end
+    self.select_width_of.insert(id, width)
+    self.link(id)
+  end
+
+  ## Attach a long-press handler to the LAST-built node (F2; docs/LAYOUT.md). This
+  ## is the one post-hoc modifier in the DSL — every builder returns `nil` (the
+  ## arena is push-only, no node handle to chain on), so a gesture handler attaches
+  ## by node id right after the widget it decorates. The closure is STORED (a
+  ## `{ |ui| … }` brace closure, re-invoked when a long-press fires), so it lives
+  ## in the `long_press_handlers` pool — the same pattern as `button` handlers.
+  ##
+  ##   c.button("item", { |ui| open(ui) })
+  ##   c.long_press({ |ui| open_context_menu(ui) })   # decorates the button above
+  def var long_press(on_long_press: any Fn[Fn(&var Ui) -> nil]) -> nil
+    let id = self.size - 1
+    if id < 0
+      return
+    end
+    self.long_press_of.insert(id, self.long_press_handlers.size as Int)
+    self.long_press_handlers.push(on_long_press)
+  end
+
+  ## A horizontal container: the nodes built inside the block become its
+  ## children and are stacked along the X axis by the layout pass.
+  ##
+  ##   root.row do |c|
+  ##     c.text("left")
+  ##     c.text("right")
+  ##   end
+  ##
+  ## The block is an IMMEDIATELY-INVOKED builder block (`&block` + `yield`): it
+  ## runs exactly once, here, while the cursor is on this container — it is never
+  ## stored. That is why it is a declared block (`do…end` / `{ }`) rather than a
+  ## stored closure param; stored callbacks (`dyn_text`, `button`) keep the
+  ## `{ |x| … }` brace form. See docs/DSL.md "Blocks & the do/brace idiom".
+  def var row(&block: Fn[(&var Col) -> nil]) -> nil
+    let prev = self.open_container(kind_row())
+    yield &var *self
+    self.close_container(prev)
+  end
+
+  ## A vertical container: the nodes built inside the block become its
+  ## children and are stacked along the Y axis by the layout pass.
+  def var col(&block: Fn[(&var Col) -> nil]) -> nil
+    let prev = self.open_container(kind_col())
+    yield &var *self
+    self.close_container(prev)
+  end
+
+  ## A horizontal container with a `Style` (padding / background / border).
+  ##
+  ##   root.row_styled(card_style) do |c| c.text("x") end
+  def var row_styled(style: Style, &block: Fn[(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.store_style(id, &style)
+    let prev = self.open_container(kind_row())
+    yield &var *self
+    self.close_container(prev)
+  end
+
+  ## A vertical container with a `Style` (padding / background / border).
+  def var col_styled(style: Style, &block: Fn[(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.store_style(id, &style)
+    let prev = self.open_container(kind_col())
+    yield &var *self
+    self.close_container(prev)
+  end
+
+  ## A `stack` container: every child occupies the stack's box (z-order = build
+  ## order — first child at the bottom, last on top), each optionally offset by
+  ## its own `Style.offset(left, top)`. Children paint in build order (bottom→top)
+  ## and hit-test in REVERSE (topmost wins). The primitive for badges/overlap.
+  ##
+  ##   root.stack do |c: &var Col|
+  ##     c.text("base")
+  ##     c.col_styled(badge_style.offset(40, 0)) do |b: &var Col| b.text("9") end
+  ##   end
+  def var stack(&block: Fn[(&var Col) -> nil]) -> nil
+    let prev = self.open_container(kind_stack())
+    yield &var *self
+    self.close_container(prev)
+  end
+
+  ## A `stack` with a `Style` (padding / background / border / its own offset).
+  def var stack_styled(style: Style, &block: Fn[(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.store_style(id, &style)
+    let prev = self.open_container(kind_stack())
+    yield &var *self
+    self.close_container(prev)
+  end
+
+  ## A vertically-scrolling list: a `Col`-like container with a FIXED viewport
+  ## height. Children stack on Y but are clipped to `viewport_h` and scrolled by
+  ## an offset (App.scroll_to / scroll_by) when the content overflows.
+  ##
+  ## The builder block is OPTIONAL (`block_defined?`): `root.list(h)` with no
+  ## block builds an empty scrollable region (a fixed-height placeholder), while
+  ## `root.list(h) do |c| … end` fills it. The empty form is the genuine
+  ## optional-block case — a reserved viewport whose rows arrive later.
+  def var list(viewport_h: Int, &block: Fn[(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.viewport_of.insert(id, viewport_h)
+    let prev = self.open_container(kind_list())
+    if block_defined?
+      yield &var *self
+    end
+    self.close_container(prev)
+  end
+
+  ## A HORIZONTALLY-scrolling list (F2): like `list`, but children stack + scroll
+  ## on the X axis and the viewport is a fixed WIDTH. Reuses `kind_list` (so all
+  ## the clip/scroll/hit/scrollbar machinery is shared) + a per-node horizontal
+  ## flag the layout/paint/hit passes read.
+  ##
+  ##   root.hlist(200) do |c: &var Col|
+  ##     c.text("col 1")
+  ##     c.text("col 2")            # overflows 200px → clips + scrolls on X
+  ##   end
+  def var hlist(viewport_w: Int, &block: Fn[(&var Col) -> nil]) -> nil
+    let id = self.size
+    self.viewport_of.insert(id, viewport_w)
+    self.horizontal_of.insert(id, true)
+    let prev = self.open_container(kind_list())
+    if block_defined?
+      yield &var *self
+    end
+    self.close_container(prev)
+  end
+
+  ## A REACTIVE list: like `list`, but its children are built from a shared
+  ## `ListModel` and REBUILT whenever the model changes. The one structural-
+  ## reactivity construct (docs/decisions/structural-reactivity.md):
+  ##
+  ##   let todos = ui.list_model
+  ##   root.list_of(todos, row_height() * 6, { |c, m, i| c.text(m.row_text(i)) })
+  ##   …later, in a handler: todos.add(ui, "new")  → the list rebuilds on flush
+  ##
+  ## The node is a tracking scope: its compute reads `model.version`, so a
+  ## mutation (which bumps the version) marks this node dirty; `App.flush`
+  ## rebuilds its child subtree.
+  ##
+  ## `item_builder` is a STORED closure param, NOT a `&block` — unlike `row`/
+  ## `col`/`list` (which yield their block ONCE at build time), a `list_of`
+  ## RE-INVOKES this builder on every rebuild (it lives in the `item_builders`
+  ## pool, re-run by `App.rebuild_list`). A `&block` slot is for yield-time use;
+  ## storing a block is a different lifetime story, so this stays a `{ |c, m, i|
+  ## … }` brace closure. See docs/DSL.md "Blocks & the do/brace idiom".
+  def var list_of(
+    model: ListModel,
+    viewport_h: Int,
+    item_builder: any Fn[Fn(&var Col, ListModel, Int) -> nil],
+  ) -> nil
+    let id = self.size
+    self.kinds.push(kind_list_of())
+    self.labels.push("")
+    self.compute_of.push(-1)
+    self.handler_of.push(-1)
+    self.viewport_of.insert(id, viewport_h)
+    self.model_of.insert(id, self.models.size as Int)
+    self.models.push(model)
+    self.item_builder_of.insert(id, self.item_builders.size as Int)
+    self.item_builders.push(item_builder)
+    self.link(id)
+  end
+
+  # NB: the initial rows are NOT built here — `App.mount` runs the list_of
+  # node's `refresh_node`, which subscribes + rebuilds (and mounts) the
+  # children from the seeded model. One build path, no duplicate.
+  ## (Re)build the child rows of reactive-list `id` from its current model: clear
+  ## the existing child chain, move the cursor onto the list, run the item
+  ## builder once per item (fresh child nodes append + link under the list), then
+  ## restore the cursor. Old children are orphaned (unlinked, never reached).
+  def var build_items(id: Int) -> nil
+    self.child_first.insert(id, -1)
+    self.child_last.insert(id, -1)
+    let mi = self.model_index_at(id)
+    let bi = self.item_builder_index_at(id)
+    if mi < 0 || bi < 0
+      return
+    end
+    let prev = self.parent_cursor
+    self.parent_cursor = id
+    self.run_item_builder(id, mi, bi)
+    self.parent_cursor = prev
+  end
+
+  ## Subscribe the recording scope to reactive-list `id`'s model version
+  ## (fetches a fresh model copy and calls `ListModel.subscribe`). `App` calls
+  ## this while the list's tracking scope is current, so a later version bump
+  ## marks the list dirty.
+  def var subscribe_model(id: Int, ui: &var Ui) -> nil
+    let mi = self.model_index_at(id)
+    if mi < 0
+      return
+    end
+    match self.models.get(mi)
+      Some(m) -> m.subscribe(&var *ui)
+      nil -> nil
+    end
   end
 
   ## Kind of node `i`, or 0 if out of range.
   def kind_at(i: Int) -> Int
     match self.kinds.get(i)
       Some(k) -> *k
-      nil     -> 0
+      nil -> 0
     end
   end
+
+  ## True when node `i` is a container (row / col / stack / list / list_of) that
+  ## owns children.
+  def container_at(i: Int) -> Bool
+    let k = self.kind_at(i)
+    k == kind_row() || k == kind_col() || k == kind_stack() || k == kind_list() ||
+    k == kind_list_of()
+  end
+
+  ## True when node `i` is a `stack` (children overlap; topmost hit-tests first).
+  def stack_at(i: Int) -> Bool { self.kind_at(i) == kind_stack() }
+
+  ## True when node `i` is a scrolling list — fixed (`list`) OR reactive
+  ## (`list_of`). Both clip + scroll + use a viewport, so they share the
+  ## viewport/scroll/clip machinery.
+  def list_at(i: Int) -> Bool
+    let k = self.kind_at(i)
+    k == kind_list() || k == kind_list_of()
+  end
+
+  ## True when node `i` is a REACTIVE list (rebuilt from a `ListModel`).
+  def list_of_at(i: Int) -> Bool { self.kind_at(i) == kind_list_of() }
+
+  ## True when node `i` is a text input (focusable / editable).
+  def input_at(i: Int) -> Bool { self.kind_at(i) == kind_input() }
+
+  ## True when input `i` is a MULTI-LINE textarea (false for a single-line input).
+  def multiline_at(i: Int) -> Bool
+    match self.multiline_of.get(i)
+      Some(v) -> *v
+      nil -> false
+    end
+  end
+
+  ## Visible row count of textarea `i` (1 for a single-line input / non-input).
+  def rows_at(i: Int) -> Int
+    match self.rows_of.get(i)
+      Some(v) -> *v
+      nil -> 1
+    end
+  end
+
+  ## Fixed box width of input `i`, or 0 (not an input / out of range).
+  def input_width_at(i: Int) -> Int
+    match self.input_width_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Index into the `values` pool for input `i`, or -1.
+  def value_index_at(i: Int) -> Int
+    match self.value_of.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## True when node `i` is a checkbox.
+  def checkbox_at(i: Int) -> Bool { self.kind_at(i) == kind_checkbox() }
+
+  ## Index into the `bools` pool for checkbox `i`, or -1.
+  def bool_index_at(i: Int) -> Int
+    match self.bool_of.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## True when node `i` is a slider.
+  def slider_at(i: Int) -> Bool { self.kind_at(i) == kind_slider() }
+
+  ## Index into the `ints` pool for slider `i`, or -1.
+  def int_index_at(i: Int) -> Int
+    match self.int_of.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  def slider_min_at(i: Int) -> Int
+    match self.slider_min_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def slider_max_at(i: Int) -> Int
+    match self.slider_max_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def slider_width_at(i: Int) -> Int
+    match self.slider_width_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## True when node `i` is a select (dropdown).
+  def select_at(i: Int) -> Bool { self.kind_at(i) == kind_select() }
+
+  ## Trigger box width of select `i`, or 0.
+  def select_width_at(i: Int) -> Int
+    match self.select_width_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Number of options of select `i`, or 0.
+  def option_count_at(i: Int) -> Int
+    match self.option_count_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## The `k`-th option string of select `i` ("" if out of range).
+  def option_at(i: Int, k: Int) -> String
+    let start = match self.option_start_of.get(i)
+        Some(v) -> *v
+        nil -> -1
+      end
+    if start < 0
+      return ""
+    end
+    if k < 0 || k >= self.option_count_at(i)
+      return ""
+    end
+    match self.option_strings.get(start + k)
+      Some(s) -> s.clone
+      nil -> ""
+    end
+  end
+
+  ## The `ListModel` bound to reactive-list `i`. (Caller should check
+  ## `list_of_at(i)` first; returns a fresh empty model otherwise.)
+  def model_at(i: Int) -> ListModel
+    let mi = self.model_index_at(i)
+    if mi < 0
+      return ListModel.new(State.new(-1, 0))
+    end
+    match self.models.get(mi)
+      Some(m) -> m
+      nil -> ListModel.new(State.new(-1, 0))
+    end
+  end
+
+  ## Fixed viewport extent of list `i` (height for a vlist, WIDTH for an hlist),
+  ## or 0 (not a list / out of range).
+  def viewport_at(i: Int) -> Int
+    match self.viewport_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## True when list `i` scrolls HORIZONTALLY (built with `hlist`); false for a
+  ## vertical list or any non-list.
+  def horizontal_at(i: Int) -> Bool
+    match self.horizontal_of.get(i)
+      Some(v) -> *v
+      nil -> false
+    end
+  end
+
+  ## First child of node `i`, or -1 (leaf / out of range).
+  def first_child_of(i: Int) -> Int
+    match self.child_first.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## Next sibling of node `i`, or -1 (last child / out of range).
+  def next_sibling_of(i: Int) -> Int
+    match self.child_next.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## Parent of node `i`, or -1 (a top-level root / out of range).
+  def parent_of(i: Int) -> Int
+    match self.parent.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## First top-level (root) node, or -1 when the tree is empty.
+  def root_head -> Int { self.root_first }
 
   ## Static label of node `i` ("" for reactive text or out of range).
   def label_at(i: Int) -> String
     match self.labels.get(i)
       Some(s) -> s.clone
-      nil     -> String.from("")
+      nil -> ""
     end
   end
 
@@ -98,7 +945,7 @@ class Col
   def compute_at(i: Int) -> Int
     match self.compute_of.get(i)
       Some(v) -> *v
-      nil     -> -1
+      nil -> -1
     end
   end
 
@@ -106,7 +953,327 @@ class Col
   def handler_at(i: Int) -> Int
     match self.handler_of.get(i)
       Some(v) -> *v
-      nil     -> -1
+      nil -> -1
     end
   end
+
+  ## Index into `long_press_handlers` for node `i`, or -1 (no long-press handler).
+  def long_press_at(i: Int) -> Int
+    match self.long_press_of.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## Uniform padding (px) of container `i`, or 0 — the shorthand value for
+  ## introspection. Layout uses the per-side readers below.
+  def pad_at(i: Int) -> Int
+    match self.pad_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Per-side padding (px) of container `i`, or 0. The place pass insets children
+  ## by (pad_l, pad_t) and grows the box by pad_l+pad_r / pad_t+pad_b.
+  def pad_l_at(i: Int) -> Int
+    match self.pad_l_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def pad_t_at(i: Int) -> Int
+    match self.pad_t_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def pad_r_at(i: Int) -> Int
+    match self.pad_r_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def pad_b_at(i: Int) -> Int
+    match self.pad_b_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Main-axis gap (px) between adjacent children of container `i`, or 0.
+  def gap_at(i: Int) -> Int
+    match self.gap_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Main-axis distribution of container `i` (default `just_start`).
+  def justify_at(i: Int) -> Int
+    match self.justify_of.get(i)
+      Some(v) -> *v
+      nil -> just_start()
+    end
+  end
+
+  ## Cross-axis alignment of container `i` (default `align_start`).
+  def align_at(i: Int) -> Int
+    match self.align_of.get(i)
+      Some(v) -> *v
+      nil -> align_start()
+    end
+  end
+
+  ## Main-axis grow weight of node `i` in its parent (default 0).
+  def grow_at(i: Int) -> Int
+    match self.grow_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## Stack-positioning offsets (px) of node `i` (default 0).
+  def offset_l_at(i: Int) -> Int
+    match self.offset_l_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def offset_t_at(i: Int) -> Int
+    match self.offset_t_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  ## True when node `i` has a background fill (`bg_r >= 0`).
+  def has_bg_at(i: Int) -> Bool
+    match self.bg_r_of.get(i)
+      Some(v) -> *v >= 0
+      nil -> false
+    end
+  end
+
+  ## True when node `i` has a border (stroke width > 0).
+  def has_border_at(i: Int) -> Bool
+    match self.border_w_of.get(i)
+      Some(v) -> *v > 0
+      nil -> false
+    end
+  end
+
+  def bg_r_at(i: Int) -> Int
+    match self.bg_r_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def bg_g_at(i: Int) -> Int
+    match self.bg_g_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def bg_b_at(i: Int) -> Int
+    match self.bg_b_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def border_w_at(i: Int) -> Int
+    match self.border_w_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def border_r_at(i: Int) -> Int
+    match self.border_r_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def border_g_at(i: Int) -> Int
+    match self.border_g_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def border_b_at(i: Int) -> Int
+    match self.border_b_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  def corner_at(i: Int) -> Int
+    match self.corner_of.get(i)
+      Some(v) -> *v
+      nil -> 0
+    end
+  end
+
+  private
+
+  ## Record `style` against node `id` (only the set fields; padding always).
+  def var store_style(id: Int, style: &Style) -> nil
+    self.pad_of.insert(id, style.padding)
+    self.pad_l_of.insert(id, style.pad_l)
+    self.pad_t_of.insert(id, style.pad_t)
+    self.pad_r_of.insert(id, style.pad_r)
+    self.pad_b_of.insert(id, style.pad_b)
+    self.gap_of.insert(id, style.gap)
+    self.justify_of.insert(id, style.justify)
+    self.align_of.insert(id, style.align)
+    self.grow_of.insert(id, style.grow)
+    self.offset_l_of.insert(id, style.offset_l)
+    self.offset_t_of.insert(id, style.offset_t)
+    self.corner_of.insert(id, style.corner)
+    if style.has_bg
+      self.bg_r_of.insert(id, style.bg_r)
+      self.bg_g_of.insert(id, style.bg_g)
+      self.bg_b_of.insert(id, style.bg_b)
+    end
+    if style.has_border
+      self.border_w_of.insert(id, style.border_w)
+      self.border_r_of.insert(id, style.border_r)
+      self.border_g_of.insert(id, style.border_g)
+      self.border_b_of.insert(id, style.border_b)
+    end
+  end
+
+  ## Thread freshly-pushed node `id` into the current parent's child chain
+  ## (or the top-level root chain when `parent_cursor` is -1). Sets the
+  ## node's own links to leaf defaults.
+  def var link(id: Int) -> nil
+    self.parent.insert(id, self.parent_cursor)
+    self.child_first.insert(id, -1)
+    self.child_last.insert(id, -1)
+    self.child_next.insert(id, -1)
+    if self.parent_cursor < 0
+      self.append_root(id)
+    else
+      self.append_child(self.parent_cursor, id)
+    end
+  end
+
+  ## Append `id` to the top-level root sibling chain.
+  def var append_root(id: Int) -> nil
+    if self.root_first < 0
+      self.root_first = id
+    else
+      self.child_next.insert(self.root_last, id)
+    end
+    self.root_last = id
+  end
+
+  ## Append `id` to container `cid`'s child chain.
+  def var append_child(cid: Int, id: Int) -> nil
+    let last = match self.child_last.get(cid)
+        Some(v) -> *v
+        nil -> -1
+      end
+    if last < 0
+      self.child_first.insert(cid, id)
+    else
+      self.child_next.insert(last, id)
+    end
+    self.child_last.insert(cid, id)
+  end
+
+  ## Push a container node of `kind`, link it, and move the build cursor ONTO it
+  ## so subsequent appends become its children. Returns the PREVIOUS cursor for
+  ## the matching `close_container`. The public container builders bracket their
+  ## `yield` between `open_container` / `close_container` rather than forwarding a
+  ## block to a shared helper — block-forwarding (`g(&block)`) is a staged ruxen
+  ## feature (ruby-block ADR, "Out of scope"), so each builder yields directly.
+  def var open_container(kind: Int) -> Int
+    let id = self.size
+    self.kinds.push(kind)
+    self.labels.push("")
+    self.compute_of.push(-1)
+    self.handler_of.push(-1)
+    self.link(id)
+    let prev = self.parent_cursor
+    self.parent_cursor = id
+    prev
+  end
+
+  ## Restore the build cursor saved by `open_container`, so containers nest to
+  ## any depth.
+  def var close_container(prev: Int) -> nil { self.parent_cursor = prev }
+
+  ## Index into the `models` pool for reactive-list `i`, or -1.
+  def model_index_at(i: Int) -> Int
+    match self.model_of.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## Index into the `item_builders` pool for reactive-list `i`, or -1.
+  def item_builder_index_at(i: Int) -> Int
+    match self.item_builder_of.get(i)
+      Some(v) -> *v
+      nil -> -1
+    end
+  end
+
+  ## Run reactive-list `id`'s item builder once per model item, appending a row
+  ## subtree per item under the current cursor (already set to `id`).
+  ##
+  ## NB: a method call CONSUMES a non-Copy class receiver in this ruxen build
+  ## (`model.count` would move `model`). So we fetch a FRESH model copy from the
+  ## pool for each use — `count_of_model` (consumes its own copy) and one copy
+  ## per item for the builder call (each copy shares the same cell).
+  def var run_item_builder(id: Int, mi: Int, bi: Int) -> nil
+    let n = self.count_of_model(mi)
+    var i = 0
+    while i < n
+      match self.item_builders.get(bi)
+        Some(f) -> self.invoke_item_builder(f, id, mi, i)
+        nil -> nil
+      end
+      i = i + 1
+    end
+  end
+
+  ## Item count of the model at pool index `mi` (fetches its own copy).
+  def count_of_model(mi: Int) -> Int
+    match self.models.get(mi)
+      Some(m) -> m.count
+      nil -> 0
+    end
+  end
+
+  ## Invoke one item-builder call, fetching a fresh model copy from the pool so
+  ## the receiver-consuming method-call landmine never reuses one binding.
+  def var invoke_item_builder(
+    f: &any Fn[Fn(&var Col, ListModel, Int) -> nil],
+    id: Int,
+    mi: Int,
+    i: Int,
+  ) -> nil
+    let m = match self.models.get(mi)
+        Some(mm) -> mm
+        nil -> ListModel.new(State.new(-1, 0))
+      end
+    f.(&var *self,
+    m,
+    i)
+  end
+
+  public
+
+  alias length size
 end

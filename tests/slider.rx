@@ -1,0 +1,137 @@
+# Pins the horizontal Slider (docs/DSL.md) + the drag-capture event infra.
+# A slider is bound to a reactive State[Int], clamped to [min, max]. Click on
+# the track jumps to the click fraction; dragging (via capture) updates it
+# continuously. All headless — programmatic pointer API + RecordingSurface.
+Tester.describe("slider — value mapping, drag capture, paint") do |t: &var Tester|
+  # A slider 100px wide over [0, 10], bound to a State[Int] starting at 0.
+  # Track width = width - thumb = 100 - 12 = 88; track_left = x + 6.
+  let form = { ||
+    App.build({ |ui: &var Ui, root: &var Col|
+      let vol = ui.state(0)
+      root.slider(vol, 0, 10, 100)      # node 0
+    })
+  }
+
+  t.it("starts at the initial value; the slider is one row tall, fixed width") do
+    var app = form.()
+    t.expect(app.slider_value(0)).to_eq(0)
+    t.expect(app.w_of(0)).to_eq(100)
+    t.expect(app.h_of(0)).to_eq(row_height())
+  end
+
+  t.it("a click at the track midpoint sets the value to the midpoint") do
+    var app = form.()
+    # track midpoint x = track_left(6) + track_w(88)/2 = 50 -> value 5
+    app.pointer_down(50, 2)
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(5)
+  end
+
+  t.it("dragging past the right edge clamps to max; past the left to min") do
+    var app = form.()
+    app.pointer_down(50, 2)             # grab (value 5)
+    app.drag_to(0, 1000)               # far right
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(10)
+    app.drag_to(0, 0 - 1000)           # far left
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(0)
+  end
+
+  t.it("set_value clamps to [min, max]") do
+    var app = form.()
+    app.set_value(0, 7)
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(7)
+    app.set_value(0, 99)
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(10)
+    app.set_value(0, 0 - 5)
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(0)
+  end
+
+  t.it("a value change repaints exactly the slider (targeted)") do
+    var app = form.()
+    app.set_value(0, 3)
+    let refreshed = app.flush
+    t.expect(refreshed.size as Int).to_eq(1)
+    ArrayMatcher.new(&refreshed).to_include(0)
+  end
+
+  # --- drag capture ---
+
+  t.it("pointer_down captures the slider; a move far away still updates IT") do
+    var app = form.()
+    let hit = app.pointer_down(50, 2)
+    t.expect(hit).to_eq(0)
+    t.expect(app.captured_node).to_eq(0)
+    # a pointer_move far OUTSIDE the slider still drives the captured slider
+    app.pointer_move(500, 500)
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(10)   # x=500 clamps to max
+  end
+
+  t.it("pointer_up releases capture; a later move does nothing") do
+    var app = form.()
+    app.pointer_down(50, 2)             # value 5, captured
+    app.flush
+    app.pointer_up(50, 2)
+    t.expect(app.captured_node).to_eq(-1)
+    app.pointer_move(6, 2)             # would be value 0 if captured
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(5)    # unchanged — capture released
+  end
+
+  t.it("pointer_move with nothing captured is a no-op") do
+    var app = form.()
+    app.pointer_move(6, 2)
+    app.flush
+    t.expect(app.slider_value(0)).to_eq(0)
+    t.expect(app.captured_node).to_eq(-1)
+  end
+
+  # --- paint ---
+
+  t.it("paint records the track and the thumb at the value's x") do
+    var app = form.()
+    app.set_value(0, 5)
+    app.flush
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    # clear + track + filled-portion + thumb
+    t.expect(surface.command_at(0)).to_eq("clear(255,255,255)")
+    # thumb for value 5: center x = 6 + 5*88/10 = 50; thumb box at cx-6 = 44,
+    # y = (row_height - slider_thumb)/2 = 6
+    let thumb_cmd = surface.command_at(surface.size - 1)
+    t.expect(thumb_cmd).to_eq("round_rect(44,6,#{slider_thumb()},#{slider_thumb()},6,60,60,160)")
+  end
+
+  t.it("the thumb sits at track_left for the min value") do
+    var app = form.()
+    # value 0 -> center x = track_left = 6 -> thumb box at 0
+    var surface = RecordingSurface.new
+    paint_all(&app, &var surface)
+    t.expect(surface.command_at(surface.size - 1)).to_eq("round_rect(0,6,#{slider_thumb()},#{slider_thumb()},6,60,60,160)")
+  end
+
+  t.it("a slider inside a scrolled list still hit-tests / captures correctly") do
+    var app = App.build({ |ui: &var Ui, root: &var Col|
+      let a = ui.state(0)
+      let b = ui.state(0)
+      let c = ui.state(0)
+      root.list(row_height() * 2, { |col: &var Col|
+        col.slider(a, 0, 10, 100)   # node 1, content y 0
+        col.slider(b, 0, 10, 100)   # node 2, content y 24
+        col.slider(c, 0, 10, 100)   # node 3, content y 48
+      })
+    })
+    app.scroll_to(0, row_height())     # slider b now at screen-top
+    let hit = app.pointer_down(50, 2)  # screen-top -> slider b (node 2)
+    t.expect(hit).to_eq(2)
+    t.expect(app.captured_node).to_eq(2)
+    app.flush
+    t.expect(app.slider_value(2)).to_eq(5)   # midpoint click set b to 5
+    t.expect(app.slider_value(1)).to_eq(0)   # a untouched
+  end
+end
