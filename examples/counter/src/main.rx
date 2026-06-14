@@ -103,6 +103,32 @@ def main
   end
 end
 
+## WEB entry (wasm). Exported and called by the JS host (canvas/web): build the
+## same quiver app, paint ONE frame to a standalone web-backed Canvas (whose
+## ruxen_canvas_* calls are host imports → CanvasKit), and return 1. No Window /
+## SDL / event loop — the browser drives frames (rAF) and events separately.
+def render -> Int
+  match Canvas.create(200, 96)
+    Ok(c) -> render_into(c)
+    Err(_) -> 0
+  end
+end
+
+def render_into(c0: Canvas) -> Int
+  var canvas = c0
+  var app = App.build({ |ui: &var Ui, root: &var Col|
+    let count = ui.state(0)
+    root.text("Counter")
+    root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })
+    root.button("tap +1", { |ui2| count.update(ui2, { |x| x + 1 }) })
+  })
+  let _ = canvas.begin_frame
+  var skia = SkiaPaint.new(&var canvas)
+  paint_all(&app, &var skia)
+  let _ = canvas.end_frame
+  1
+end
+
 ## Own the window, build the quiver app, and run it — windowed if an OS window
 ## opens, otherwise headless.
 def drive(win0: Window) -> nil
