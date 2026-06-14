@@ -383,3 +383,52 @@ demo (lands naturally once offset transitions do).
       compile time. quiver's `size > 0` workaround guards were removed (lookups
       are plain `match h.get(i)`). Repro kept for history in
       `tmp/test-cache/ruxen-empty-string-hash-segfault.md`.
+
+## Milestone 2 — framework-owned entry + web (in progress, 2026-06-14)
+
+The user-facing goal: **apps write ONLY components + a DSL tree.** No
+`SkiaPaint`, no `paint_frame`, no `Window.open`, no event loop in user code —
+Flutter's `runApp` model. Target app:
+
+```ruxen
+use quiver
+def counter(c: &var Col, ui: &var Ui)     # a component = a fn that builds into the tree
+  let n = ui.state(0)
+  c.text("Counter"); c.dyn_text({ |ui| "count: #{n.get(ui)}" })
+  c.button("+1", { |ui| n.update(ui, { |x| x + 1 }) })
+end
+def main
+  run_app("Counter", 360, 240, { |ui: &var Ui, root: &var Col| counter(&var *root, &var *ui) })
+end
+```
+
+**Decision (2026-06-14): ONE package.** quiver itself depends on canvas and
+ships `run_app`. Rejected a separate `quiver_desktop` binder package — there is
+only one backend (canvas drives both desktop Skia/SDL *and* web CanvasKit via
+the same `ruxen_canvas_*` ABI), so the abstraction would be an extra package the
+user must learn for zero second implementation.
+
+**No ruxen compiler change is needed** (investigation, see memory
+`ruxen-deps-transitive-linking`): binaries already do transitive `.rx`
+flat-merge + transitive runtime-C compile + transitive `[system_libs]`
+forwarding (`ruxen build.rs:605/868-872/879-889`); the old Q16 test-link issue
+is already fixed (Q32) — and this very roadmap already records "ruxen Q16 fixed"
+above. quiver's own `ruxen build` (rlib, no link) and `ruxen check` work fine
+with a canvas dep. This **reverses** the "quiver stays canvas-free by charter"
+rule (the `Ruxen.toml` comment) — that rule was caution, not a hard limit.
+
+- [ ] add canvas as `[dependencies]` in `quiver/Ruxen.toml`
+- [ ] `src/desktop.rx`: `SkiaPaint` (PaintSurface over canvas `Canvas`) +
+      `run_app(title,w,h,build)` + window/event loop (relocated from
+      `examples/counter/src/main.rx`) — watch flat-namespace collisions
+- [ ] smoke-test `ruxen check`/`build`/`test` still green with the canvas dep
+- [ ] formalize the component pattern (`def name(c: &var Col, ui: &var Ui)`)
+- [ ] shrink `examples/counter/src/main.rx` to just `def main; run_app(...) end`
+- [ ] rewrite `docs/TUTORIAL.md` to the single structure
+
+**Web side (counter compiles+links to wasm; paint pipeline wired):**
+- [ ] `render()` traps on a genuine LLVM `unreachable` — debug (not
+      ruxen_panic/exit; likely a match path hit by the Formatter stub returning 0n)
+- [ ] browser rAF frame loop + event wiring → interactive in-browser counter
+
+Flukebase: `6e07fc18…` (run_app + components), `7962d09c…` (web interactivity).

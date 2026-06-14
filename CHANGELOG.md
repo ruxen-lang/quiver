@@ -7,6 +7,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Framework-owned `run_app` + component model (Milestone 2).** Apps now write
+  only **components** (functions `def name(c: &var Col, ui: &var Ui)`) + a DSL
+  tree handed to **`run_app(title, w, h, build)`**; quiver owns the window, the
+  Skia paint bridge, and the event loop (`src/desktop.rx`: `SkiaPaint`,
+  `run_app`, `run_windowed`). No hand-written shell in user code. quiver gained a
+  `canvas` dependency (reverses the prior "canvas-free by charter" rule — a
+  toolchain investigation showed binaries flat-merge the full transitive
+  dependency closure and link each dep's C runtime + system_libs, so the rule was
+  caution, not a hard limit; see `docs/ROADMAP.md` Milestone 2). An app now
+  depends on **only quiver** (canvas is pulled in transitively).
+  `examples/counter` reduced to a `counter` component + `run_app`;
+  `docs/TUTORIAL.md` rewritten to this one structure.
 - **F4 — animation engine** (`docs/decisions/animation.md`): explicit tweens +
   colour implicit transitions, stepped deterministically off the F2 clock seam
   (`App.tick`). Default-inert — with no live animation every paint pin is

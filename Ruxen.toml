@@ -7,17 +7,18 @@ description = "L2 framework for the Ruxen GUI stack: fine-grained reactive signa
 [build]
 type = "library"
 
-# No [dependencies] on canvas — and that is deliberate.
-#
-# quiver (L2) is platform-AGNOSTIC: its src/ and tests/ contain zero canvas
-# (L1) symbols (paint crosses the boundary as plain Ints/Strings only). An app
-# chooses its rendering engine and declares BOTH quiver and an engine (canvas)
-# itself — see examples/*/Ruxen.toml. This is what lets quiver target any
-# backend, not just canvas.
-#
-# A hard canvas dependency here also BREAKS `ruxen test`: ruxen v1 flat-merges a
-# dependency's full src into the consumer's build (Q16), so canvas's FFI-calling
-# method bodies would be pulled into quiver's test EXECUTABLE without canvas's
-# C runtime/system_libs linked → undefined `ruxen_canvas_*` at link. (Tracked as
-# a ruxen Q-candidate: flat-merge of an FFI dependency into a test/binary build
-# should be demand-driven or link the dep's C runtime.)
+[dependencies]
+# quiver now OWNS the desktop shell (src/desktop.rx: SkiaPaint + run_app + event
+# loop) so apps write only components + DSL. That requires quiver to see canvas
+# (L1) symbols. Safe in ruxen v1: a LIBRARY build archives an rlib with no link
+# step (undefined ruxen_canvas_* defer to the consuming binary), and a BINARY
+# flat-merges the full transitive closure + compiles canvas's runtime/*.c +
+# forwards its [system_libs] (canvas's are empty — SDL2/Skia are dlopen'd). The
+# old Q16 "deps don't merge for library/test" issue is fixed (Q32). See memory
+# ruxen-deps-transitive-linking + quiver/docs/ROADMAP.md Milestone 2.
+canvas = { path = "../canvas" }
+
+# Historical note: quiver was previously canvas-free "by charter" (platform
+# agnostic, pick-your-backend). Reversed 2026-06-14 — there is only one backend
+# (canvas drives desktop Skia/SDL AND web CanvasKit via the same ruxen_canvas_*
+# ABI), so the abstraction bought nothing and cost the user a hand-written shell.

@@ -1,112 +1,30 @@
-## counter — the "hello world" of reactive GUI, and the first vertical slice
-## that proves the Ruxen GUI stack end-to-end (canvas L1 ↔ quiver L2).
+## counter — the canonical quiver app, and the "hello world" of the Ruxen GUI
+## stack. This is the WHOLE app: a component + `run_app`. quiver owns the window,
+## the Skia paint bridge, and the event loop (src/desktop.rx) — the app writes
+## only its UI.
 ##
-## Tap the button, the number increments, and the frame repaints. quiver runs
-## the reactive/dispatch/paint pipeline; this binary is the thin desktop shell
-## that bridges quiver's platform-free `RecordingSurface` to canvas's Skia
-## `Canvas` (a binary is the only place ruxen v1 lets both packages' symbols
-## meet — library builds don't merge dependency sources).
-##
-## With a display + SDL2 it opens a live OS window and is driven by the real
-## event stream; headless (CI, no display) it falls back to synthetic taps so
-## the same pipeline still runs and prints its paint output.
+## Desktop:  `ruxen run`  → opens a live OS window (or prints a notice headless).
+## Web (wasm): the JS host (canvas/web) calls `render()` to paint one frame.
 
-## SkiaPaint — this binary's DIRECT `PaintSurface` implementor (ruxen Q17). quiver's
-## generic paint pass (`paint_all`) monomorphizes against it and calls these methods
-## as it visits each node, issuing canvas/Skia draws on the spot — no recorded mirror,
-## one walk. Holds a borrow of the live `Canvas` for the frame (constructed inside the
-## begin/end bracket in `paint_frame`). Each method is the op→canvas mapping that used
-## to live in `replay`, transliterated 1:1. See docs/decisions/direct-paint-backend.md.
-class SkiaPaint
-  include PaintSurface
-  canvas: &var Canvas
-
-  def init(canvas: &var Canvas)
-    self.canvas = canvas
-  end
-
-  def var fill_clear(r: Int, g: Int, b: Int) -> nil
-    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
-    let _ = self.canvas.clear(col)
-  end
-
-  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
-    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
-    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
-    let _ = self.canvas.draw_rect(rect, col)
-  end
-
-  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
-    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
-    let label = text.clone
-    let _ = self.canvas.draw_text(label, x as Float32, y as Float32, col)
-  end
-
-  def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
-    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
-    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
-    let _ = self.canvas.draw_round_rect(rect, radius as Float32, col)
-  end
-
-  def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
-    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
-    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
-    let _ = self.canvas.stroke_round_rect(rect, radius as Float32, width as Float32, col)
-  end
-
-  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
-    let _ = self.canvas.save
-    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
-    let _ = self.canvas.clip_rect(rect)
-  end
-
-  def var push_translate(dx: Int, dy: Int) -> nil
-    let _ = self.canvas.translate(dx as Float32, dy as Float32)
-  end
-
-  def var pop_state -> nil
-    let _ = self.canvas.restore
-  end
+## A reusable COMPONENT: builds the counter UI into any column. A component is
+## just a function that takes `&var Col` (where to build) + `&var Ui` (state arena).
+def counter(c: &var Col, ui: &var Ui) -> nil
+  let n = ui.state(0)
+  c.text("Counter")
+  c.dyn_text({ |ui2| "count: #{n.get(ui2)}" })            # reactive: re-runs only this node
+  c.button("tap +1", { |ui2| n.update(ui2, { |x| x + 1 }) })
 end
 
-## Paint one frame DIRECTLY to the OS window: open a frame, drive quiver's paint
-## pass through `SkiaPaint` (which issues the Skia calls as it walks), end + present.
-def paint_frame(win: &var Window, app: &var App) -> nil
-  match win.canvas.begin_frame
-    Ok(_)  -> nil
-    Err(e) -> puts "begin_frame: #{e}"
-  end
-  var skia = SkiaPaint.new(&var win.canvas)
-  paint_all(app, &var skia)
-  let _ = win.canvas.end_frame
-  let _ = win.present
-end
-
-## Print the commands recorded since `from`, returning the new size.
-def narrate(surface: &RecordingSurface, from: Int) -> Int
-  var i = from
-  let n = surface.size
-  while i < n
-    puts "  #{surface.command_at(i)}"
-    i = i + 1
-  end
-  n
-end
-
+## Desktop entry — the entire app. No window/paint/event-loop plumbing.
 def main
-  puts "quiver counter — live window demo"
-  let w = 200
-  let h = 96
-  match Window.open("Counter", w, h)
-    Ok(win) -> drive(win)
-    Err(e)  -> puts "cannot create canvas: #{e}"
-  end
+  run_app("Counter", 360, 240, { |ui: &var Ui, root: &var Col|
+    counter(&var *root, &var *ui)
+  })
 end
 
-## WEB entry (wasm). Exported and called by the JS host (canvas/web): build the
-## same quiver app, paint ONE frame to a standalone web-backed Canvas (whose
-## ruxen_canvas_* calls are host imports → CanvasKit), and return 1. No Window /
-## SDL / event loop — the browser drives frames (rAF) and events separately.
+## Web entry (wasm) — the browser host calls this to paint one frame to a
+## standalone web-backed Canvas (whose ruxen_canvas_* calls are CanvasKit host
+## imports). No Window / event loop — the browser drives frames + events.
 def render -> Int
   match Canvas.create(200, 96)
     Ok(c) -> render_into(c)
@@ -116,103 +34,11 @@ end
 
 def render_into(c0: Canvas) -> Int
   var canvas = c0
-  var app = App.build({ |ui: &var Ui, root: &var Col|
-    let count = ui.state(0)
-    root.text("Counter")
-    root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })
-    root.button("tap +1", { |ui2| count.update(ui2, { |x| x + 1 }) })
-  })
+  var app = App.build({ |ui: &var Ui, root: &var Col| counter(&var *root, &var *ui) })
+  app.resize(200, 96)   # give layout a real viewport (App.build arranges at 0x0)
   let _ = canvas.begin_frame
-  var skia = SkiaPaint.new(&var canvas)
+  var skia = SkiaPaint.new(&var canvas)   # SkiaPaint now lives in quiver (src/desktop.rx)
   paint_all(&app, &var skia)
   let _ = canvas.end_frame
   1
-end
-
-## Own the window, build the quiver app, and run it — windowed if an OS window
-## opens, otherwise headless.
-def drive(win0: Window) -> nil
-  var win = win0
-
-  # The quiver app: identical whether driven by real events or synthetic taps.
-  var app = App.build({ |ui: &var Ui, root: &var Col|
-    let count = ui.state(0)
-    root.text("Counter")
-    # Stored-closure params need no type annotation — quiver infers `ui2: &var Ui`
-    # from the builder's signature, so the block reads as a plain Ruby block.
-    root.dyn_text({ |ui2| "count: #{count.get(ui2)}" })
-    root.button("tap +1", { |ui2| count.update(ui2, { |c| c + 1 }) })
-  })
-  var surface = RecordingSurface.new
-
-  let shown = match win.show_gpu_scaled(3)
-    Ok(_)  -> true
-    Err(e) -> announce_headless(e)
-  end
-
-  if !shown
-    # -- Headless: synthetic taps through the real pipeline --
-    puts ""
-    puts "first frame (full paint):"
-    paint_all(&app, &var surface)
-    narrate(&surface, 0)
-    var taps = 0
-    while taps < 3
-      puts ""
-      puts "pointer down on the button -> repaint:"
-      app.pointer_down(2, row_height() * 2 + 2)
-      let dirty = app.flush
-      if (dirty.size as Int) > 0
-        surface.reset
-        paint_all(&app, &var surface)
-        narrate(&surface, 0)
-      end
-      taps = taps + 1
-    end
-    puts ""
-    puts "final state: '#{app.text_of(1)}'"
-    return
-  end
-
-  # -- Windowed: inject real text metrics, then paint the first frame + loop --
-  # The binary is the only place quiver (L2) and canvas (L1) symbols meet, so the
-  # measure seam is wired HERE (quiver stays canvas-free). Plain capture of `win`
-  # (not `move` — non-Copy class) is sound today; the closure asks canvas for the
-  # true advance width at quiver's slice font size. Headless skips this entirely,
-  # so the char-metric fallback drives CI.
-  app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
-
-  paint_frame(&var win, &var app)
-
-  var running = true
-  while running
-    match win.poll_event
-      Some(ev) -> match ev
-        # canvas delivers Float32 sub-pixel coords; quiver's design space is
-        # whole Ints, so the shell quantizes at this seam (the one cast site).
-        Event.PointerDown(x, y) -> app.pointer_down(x as Int, y as Int)
-        Event.PointerMove(x, y) -> app.pointer_move(x as Int, y as Int)
-        Event.PointerUp(x, y)   -> app.pointer_up(x as Int, y as Int)
-        Event.TextInput(cp)     -> app.text_input(cp)   # printable chars insert here
-        Event.KeyDown(k)        -> app.key_down(k)        # control-only: edit / caret
-        Event.Scroll(dx, dy)    -> app.scroll(dx as Int, dy as Int)
-        Event.Resize(ww, hh)    -> app.resize(ww as Int, hh as Int)
-        Event.CloseRequested    -> running = false
-        _                       -> nil
-      end
-      nil -> nil
-    end
-    let dirty = app.flush
-    if (dirty.size as Int) > 0
-      paint_frame(&var win, &var app)
-    end
-    win.sleep_ms(16)
-  end
-  win.hide
-end
-
-## Single-statement match-arm helper: report the headless fallback, yield false.
-def announce_headless(e: String) -> Bool
-  puts "(no OS window: #{e}) — running headless"
-  false
 end

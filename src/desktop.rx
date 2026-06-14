@@ -1,0 +1,147 @@
+## desktop — the framework-owned shell. Apps call `run_app(...)`; quiver owns the
+## window, the Skia paint bridge, and the event loop. This is the ONE place
+## quiver (L2) and canvas (L1) symbols meet — made possible because the consuming
+## binary flat-merges quiver→canvas and links canvas's C runtime transitively
+## (ruxen build.rs: transitive .rx merge + runtime-C compile + [system_libs]).
+##
+## An app is then just:
+##   def main
+##     run_app("Counter", 360, 240, { |ui: &var Ui, root: &var Col|
+##       let n = ui.state(0)
+##       root.text("Counter")
+##       root.dyn_text({ |ui| "count: #{n.get(ui)}" })
+##       root.button("+1", { |ui| n.update(ui, { |x| x + 1 }) })
+##     })
+##   end
+
+## SkiaPaint — quiver's `PaintSurface` implementor backed by canvas's Skia
+## `Canvas`. quiver's generic paint pass (`paint_all`) monomorphizes against it
+## and issues canvas/Skia draws on the spot as it visits each node — one walk,
+## no recorded mirror. Holds a borrow of the live `Canvas` for the frame.
+class SkiaPaint
+  include PaintSurface
+  canvas: &var Canvas
+
+  def init(canvas: &var Canvas)
+    self.canvas = canvas
+  end
+
+  def var fill_clear(r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let _ = self.canvas.clear(col)
+  end
+
+  def var fill_rect(x: Int, y: Int, w: Int, h: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_rect(rect, col)
+  end
+
+  def var draw_text(text: &String, x: Int, y: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let label = text.clone
+    let _ = self.canvas.draw_text(label, x as Float32, y as Float32, col)
+  end
+
+  def var fill_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.draw_round_rect(rect, radius as Float32, col)
+  end
+
+  def var stroke_round_rect(x: Int, y: Int, w: Int, h: Int, radius: Int, width: Int, r: Int, g: Int, b: Int) -> nil
+    let col = Color.rgb(r as UInt8, g as UInt8, b as UInt8)
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.stroke_round_rect(rect, radius as Float32, width as Float32, col)
+  end
+
+  def var push_clip(x: Int, y: Int, w: Int, h: Int) -> nil
+    let _ = self.canvas.save
+    let rect = Rect.new(x as Float32, y as Float32, w as Float32, h as Float32)
+    let _ = self.canvas.clip_rect(rect)
+  end
+
+  def var push_translate(dx: Int, dy: Int) -> nil
+    let _ = self.canvas.translate(dx as Float32, dy as Float32)
+  end
+
+  def var pop_state -> nil
+    let _ = self.canvas.restore
+  end
+end
+
+## Paint one frame directly to the OS window: open a frame, drive quiver's paint
+## pass through `SkiaPaint`, end + present.
+def paint_frame(win: &var Window, app: &var App) -> nil
+  match win.canvas.begin_frame
+    Ok(_)  -> nil
+    Err(e) -> puts "begin_frame: #{e}"
+  end
+  var skia = SkiaPaint.new(&var win.canvas)
+  paint_all(app, &var skia)
+  let _ = win.canvas.end_frame
+  let _ = win.present
+end
+
+## Single-statement match-arm helper: report the headless fallback, yield false.
+def run_announce_headless(e: String) -> Bool
+  puts "quiver: no OS window (#{e}) — nothing to display"
+  false
+end
+
+## run_app — the entry point. Open a window titled `title` at `width`x`height`,
+## build the app from `build`, and run the event loop until the window closes.
+## Headless (no display) prints a notice and returns.
+def run_app(title: String, width: Int, height: Int, build: any Fn[Fn(&var Ui, &var Col) -> nil]) -> nil
+  match Window.open(title, width, height)
+    Ok(win) -> run_windowed(win, width, height, build)
+    Err(e)  -> puts "quiver: cannot open window: #{e}"
+  end
+end
+
+## Own the window, build the quiver app, and drive the live event loop.
+def run_windowed(win0: Window, width: Int, height: Int, build: any Fn[Fn(&var Ui, &var Col) -> nil]) -> nil
+  var win = win0
+  var app = App.build(build)
+  # Give layout the real viewport up front (App.build arranges at 0x0). A later
+  # platform Resize event re-arranges; this makes the first frame deterministic.
+  app.resize(width, height)
+
+  let shown = match win.show_gpu_scaled(1)
+    Ok(_)  -> true
+    Err(e) -> run_announce_headless(e)
+  end
+  if !shown
+    return
+  end
+
+  # The binary is the only place quiver (L2) + canvas (L1) meet, so the text
+  # measure seam is wired here: ask canvas for the true Skia advance width.
+  app.set_measure({ |t: String, sz: Int| win.canvas.measure_text_sized(t, sz as Float32) })
+
+  paint_frame(&var win, &var app)
+
+  var running = true
+  while running
+    match win.poll_event
+      Some(ev) -> match ev
+        Event.PointerDown(x, y) -> app.pointer_down(x as Int, y as Int)
+        Event.PointerMove(x, y) -> app.pointer_move(x as Int, y as Int)
+        Event.PointerUp(x, y)   -> app.pointer_up(x as Int, y as Int)
+        Event.TextInput(cp)     -> app.text_input(cp)
+        Event.KeyDown(k)        -> app.key_down(k)
+        Event.Scroll(dx, dy)    -> app.scroll(dx as Int, dy as Int)
+        Event.Resize(ww, hh)    -> app.resize(ww as Int, hh as Int)
+        Event.CloseRequested    -> running = false
+        _                       -> nil
+      end
+      nil -> nil
+    end
+    let dirty = app.flush
+    if (dirty.size as Int) > 0
+      paint_frame(&var win, &var app)
+    end
+    win.sleep_ms(16)
+  end
+  win.hide
+end
