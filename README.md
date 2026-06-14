@@ -14,6 +14,13 @@ L2  quiver   ← you are here   state + builder DSL + layout + paint     [100% s
 L3  your app
 ```
 
+## 👉 New here? Start with the [**tutorial**](docs/TUTORIAL.md)
+
+[`docs/TUTORIAL.md`](docs/TUTORIAL.md) is a beginner-friendly, copy-as-you-go
+guide: scaffold a project (incl. pulling `quiver`/`canvas` from GitHub via a
+branch dep), copy the app skeleton, then build up widgets, state, layout, and the
+reactive counter — every line explained.
+
 ## The feel
 
 ```ruxen
